@@ -4,13 +4,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 import android.os.Binder;
-import android.util.Log;
 
 public class XInputDevice extends XHook {
 	private Methods mMethod;
 
 	private XInputDevice(Methods method, String restrictionName) {
-		super(restrictionName, method.name(), null);
+		super(restrictionName, method.name(), "InputDevice." + method.name());
 		mMethod = method;
 	}
 
@@ -21,29 +20,32 @@ public class XInputDevice extends XHook {
 	// @formatter:off
 
 	// public String getDescriptor()
+	// public String getName()
 	// frameworks/base/core/java/android/view/InputDevice.java
 	// http://developer.android.com/reference/android/view/InputDevice.html
 	
 	// @formatter:on
 
 	private enum Methods {
-		getDescriptor
+		getDescriptor, getName
 	};
 
 	public static List<XHook> getInstances() {
 		List<XHook> listHook = new ArrayList<XHook>();
 		listHook.add(new XInputDevice(Methods.getDescriptor, PrivacyManager.cIdentification));
+		listHook.add(new XInputDevice(Methods.getName, PrivacyManager.cIdentification));
 		return listHook;
 	}
 
 	@Override
 	protected void before(XParam param) throws Throwable {
-		if (mMethod == Methods.getDescriptor) {
+		switch (mMethod) {
+		case getDescriptor:
+		case getName:
 			if (isRestricted(param))
 				param.setResult(PrivacyManager.getDefacedProp(Binder.getCallingUid(), "DeviceDescriptor"));
-
-		} else
-			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());
+			break;
+		}
 	}
 
 	@Override

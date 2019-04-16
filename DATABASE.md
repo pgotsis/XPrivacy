@@ -3,7 +3,7 @@
 <h2>Introduction</h2>
 
 <p>XPrivacy utilizes 2 databases (<em>xprivacy.db</em> and <em>usage.db</em>), both are located in <em>/data/system/xprivacy</em>. Making a file backup of the database cannot safely be done in a running system and should be done from recovery!</p>
-<p>XPrivacy checks both the xprivacy database and usage database at system boot for integrity (using 'PRAGMA integrity_check'). If a database is found to be corrupt, the database is deleted, because repairing an sqlite database is mostly not possible (and Android doesn't have the tools for it installed). This can happen to the database of any application, but for XPrivacy it is of course a greater concern. Given the support info I receive, this fortunately happens rarely to the xprivacy database, but more to the usage database. The cause for this difference is that usage database is set to asynchronous mode for speed reasons (using 'PRAGMA synchronous=OFF').</p>
+<p>XPrivacy checks both the xprivacy database and usage database at system boot for integrity (using 'PRAGMA integrity_check'). If a database is found to be corrupt, the database is deleted, because repairing an sqlite database is mostly not possible (and Android doesn't have the tools for it installed). This can happen to the database of any application, but for XPrivacy it is of course a greater concern. Given the support info I receive, this fortunately happens rarely to the xprivacy database, but more to the usage database. The cause for this difference is that the usage database is set to asynchronous mode for speed reasons (using 'PRAGMA synchronous=OFF').</p>
 <p>The usage database is just an aid and not critical for the operation of XPrivacy. Both the xprivacy and usage database are compacted at boot (using 'VACUUM'). This saves space and is good for performance, but the disadvantage is that twice the size of the database on disk space is temporarily needed.</p>
 <p>A full disk (/data/system is mounted on internal memory) is fatal for XPrivacy, because the database will become corrupt in this situation. Again looking at the support info, this also rarely happens.</p>
 <p>All mentioned sqlite commands are properly documented on the <a href="http://www.sqlite.org">SQLite website</a></p>
@@ -20,8 +20,6 @@
 
 <p><code>su</code></p>
 </p><code>sqlite3 /data/system/xprivacy/xprivacy.db</code></p>
-
-
 <p>*Note: You may need to install sqlite3 binaries</p>
 
 <h2><em>xprivacy.db</em> consists of two relevant tables</h2>
@@ -50,7 +48,7 @@
 | 0     | [ ] [?]            | not restricted, ask   |
 | 1     | [x] [?]            | restricted, ask       |
 | 2     | [ ] [ ]            | not restricted, asked |
-| 3     | [x] [ ]            | retricted, asked      |
+| 3     | [x] [ ]            | restricted, asked     |
 
 <h4>For method:</h4>
 
@@ -64,11 +62,11 @@
 
 <p>*NOTE: Although the 'method' field doesn't always contain data, it is still NOT NULL. To query empty entries: <code>WHERE method=''</code></p>
 
-<p>*NOTE: Changes to the restriction table require a reboot to take effect, bacause the server side cache is only flushed during a reboot or when restriction changes are applied in the XPrivacy app. For more info see <a href="http://forum.xda-developers.com/showpost.php?p=52669913&postcount=9277">here</a></p>
+<p>*NOTE: Changes to the restriction table require a flush of the server side cache to take effect, this can be achieved with a reboot, using the option 'Flush cache' found in Menu - Settings, or by sending the intent <code>am startservice -a biz.bokhorst.xprivacy.action.FLUSH</code>. The intent can either be sent with root privileges or from an app which has permission <code>biz.bokhorst.xprivacy.MANAGE_XPRIVACY</code>. For more info see <a href="http://forum.xda-developers.com/showpost.php?p=52669913&postcount=9277">here</a> and <a href="https://github.com/M66B/XPrivacy/issues/1678">here</a></p>
 
 <h3>TABLE:setting</h3>
 
-<p>The setting table holds information pertaining to settings on a global (uid='0') and per UID basis, as well as the white/blacklists.</p>
+<p>The setting table holds information pertaining to settings on a global (uid=userID; 0 for the main user) and per UID basis, as well as the white/blacklists.</p>
 
 | Field | Type    | NULLABLE |
 |-------|---------|----------|
@@ -100,6 +98,7 @@
 | extra       | TEXT    | NOT NULL |
 | restricted  | INTEGER | NOT NULL |
 | time        | INTEGER | NOT NULL |
+| value       | TEXT    | NOT NULL |
 
 <p>NOTE: Although the 'extra' field doesn't always contain data, it is still NOT NULL. To query empty entries: <code>WHERE extra=''</code></p>
 
@@ -128,10 +127,10 @@
 <p>This will list all apps that have unrestricted Internet/Inet access</p>
 
 <code>SELECT * FROM setting WHERE type='Contact' ORDER BY uid;</code>
-<p>This will list all allowed contacts, orderd by UID. Note that contact value corresponds to the same entry in <em>/data/data/com.android.providers.contacts/databases/contacts2.db:raw_contacts:contact_id</em> (Location may very depending on your ROM)<p>
+<p>This will list all allowed contacts, ordered by UID. Note that contact value corresponds to the same entry in <em>/data/data/com.android.providers.contacts/databases/contacts2.db:raw_contacts:contact_id</em> (Location may very depending on your ROM)<p>
 
 <code>SELECT * FROM setting WHERE type='Application' ORDER BY uid;</code>
-<p>This will list all allowed applications, orderd by UID.</p>
+<p>This will list all allowed applications, ordered by UID.</p>
 
 <code>UPDATE setting SET value='true' where name='OnDemand' and uid IN (10001,10002,10003);</code>
 
@@ -152,6 +151,19 @@
 <p><code>SELECT s.uid, s.name, r.restricted FROM setting s JOIN restriction r on s.uid=r.uid WHERE (r.method='inet' and r.restricted IN (0,1,3)) and (s.type='Library' and s.value='true') ORDER BY s.uid, s.name;</code></p>
 
 <p>This will list UID, native library name and INET permission value for all apps that have INET access (onDemand or permanent) as well as white listed native libraries</p>
+
+<code>UPDATE setting SET value='true' WHERE name='Log';</code>
+
+<p>This will enabled debug logging</p>
+
+<code>UPDATE setting SET value='false' WHERE name LIKE 'Dangerous%';</code>
+
+<p>This will remove all 'dangerous restrictions' from the template</p>
+
+<code>UPDATE setting SET value='false' WHERE name = 'RestrictSystem';</code>
+
+<p>This will disable restricting of system components</p>
+
 <h3><em>usage.db</em></h3>
 
 <code>SELECT * FROM usage ORDER BY time DESC;</code>

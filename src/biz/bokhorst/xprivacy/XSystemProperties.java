@@ -25,7 +25,7 @@ public class XSystemProperties extends XHook {
 	// public static boolean getBoolean(String key, boolean def)
 	// public static int getInt(String key, int def)
 	// public static long getLong(String key, long def)
-	// frameworks/base/core/java/android/os/SystemProperties.java
+	// http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.0.0_r1/android/os/SystemProperties.java/
 
 	private enum Methods {
 		get, getBoolean, getInt, getLong
@@ -52,11 +52,11 @@ public class XSystemProperties extends XHook {
 		if (key != null)
 			if (mPropertyName.startsWith("%") ? key.contains(mPropertyName.substring(1)) : key.equals(mPropertyName))
 				if (mMethod == Methods.get) {
-					if (param.getResult() != null && isRestricted(param, mPropertyName))
+					if (param.getResult() != null && isRestrictedExtra(param, mPropertyName, key))
 						param.setResult(PrivacyManager.getDefacedProp(Binder.getCallingUid(), mPropertyName));
 
 				} else if (param.args.length > 1) {
-					if (isRestricted(param, mPropertyName))
+					if (isRestrictedExtra(param, mPropertyName, key))
 						param.setResult(param.args[1]);
 
 				} else

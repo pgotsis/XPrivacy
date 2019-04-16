@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import android.accounts.Account;
 import android.util.Log;
 
 public class XGoogleAuthUtil extends XHook {
@@ -35,9 +36,9 @@ public class XGoogleAuthUtil extends XHook {
 
 	public static List<XHook> getInstances() {
 		List<XHook> listHook = new ArrayList<XHook>();
-		listHook.add(new XGoogleAuthUtil(Methods.getToken, PrivacyManager.cAccounts, "getTokenGoogle").optional());
+		listHook.add(new XGoogleAuthUtil(Methods.getToken, PrivacyManager.cAccounts, "getTokenGoogle"));
 		listHook.add(new XGoogleAuthUtil(Methods.getTokenWithNotification, PrivacyManager.cAccounts,
-				"getTokenWithNotificationGoogle").optional());
+				"getTokenWithNotificationGoogle"));
 		return listHook;
 	}
 
@@ -49,9 +50,15 @@ public class XGoogleAuthUtil extends XHook {
 	@Override
 	protected void after(XParam param) throws Throwable {
 		if (mMethod == Methods.getToken || mMethod == Methods.getTokenWithNotification) {
-			if (param.args.length > 1)
-				if (param.getResult() != null && isRestrictedExtra(param, (String) param.args[1]))
+			if (param.args.length > 1) {
+				String accountName = null;
+				if (param.args[1] instanceof String)
+					accountName = (String) param.args[1];
+				else if (param.args[1] instanceof Account)
+					accountName = ((Account) param.args[1]).type;
+				if (param.getResult() != null && isRestrictedExtra(param, accountName))
 					param.setThrowable(new IOException("XPrivacy"));
+			}
 
 		} else
 			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());

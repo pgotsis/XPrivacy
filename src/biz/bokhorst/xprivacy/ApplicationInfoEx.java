@@ -17,6 +17,9 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.res.Resources;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -31,13 +34,14 @@ public class ApplicationInfoEx implements Comparable<ApplicationInfoEx> {
 	private Map<String, PackageInfo> mMapPkgInfo = new HashMap<String, PackageInfo>();
 
 	// Cache
-	private Drawable mIcon = null;
-	private boolean mInternet = false;
-	private boolean mInternetDetermined = false;
-	private boolean mFrozen = false;
-	private boolean mFrozenDetermined = false;
+	private Boolean mInternet = null;
+	private Boolean mFrozen = null;
 	private long mInstallTime = -1;
 	private long mUpdateTime = -1;
+
+	public static final int STATE_ATTENTION = 0;
+	public static final int STATE_CHANGED = 1;
+	public static final int STATE_SHARED = 2;
 
 	public ApplicationInfoEx(Context context, int uid) {
 		mUid = uid;
@@ -82,7 +86,7 @@ public class ApplicationInfoEx implements Comparable<ApplicationInfoEx> {
 		return listApp;
 	}
 
-	public List<String> getApplicationName() {
+	public ArrayList<String> getApplicationName() {
 		return new ArrayList<String>(mMapAppInfo.navigableKeySet());
 	}
 
@@ -147,28 +151,52 @@ public class ApplicationInfoEx implements Comparable<ApplicationInfoEx> {
 	}
 
 	public Drawable getIcon(Context context) {
-		if (mIcon == null)
-			// Pick first icon
-			if (mMapAppInfo.size() > 0)
-				mIcon = mMapAppInfo.firstEntry().getValue().loadIcon(context.getPackageManager());
-		return (mIcon == null ? new ColorDrawable(Color.TRANSPARENT) : mIcon);
+		// Pick first icon
+		if (mMapAppInfo.size() > 0)
+			return mMapAppInfo.firstEntry().getValue().loadIcon(context.getPackageManager());
+		else
+			return new ColorDrawable(Color.TRANSPARENT);
+	}
+
+	public Bitmap getIconBitmap(Context context) {
+		if (mMapAppInfo.size() > 0) {
+			try {
+				final ApplicationInfo appInfo = mMapAppInfo.firstEntry().getValue();
+				if (appInfo.icon == 0)
+					appInfo.icon = android.R.drawable.sym_def_app_icon;
+				final Resources resources = context.getPackageManager().getResourcesForApplication(appInfo);
+
+				final BitmapFactory.Options options = new BitmapFactory.Options();
+				options.inJustDecodeBounds = true;
+				BitmapFactory.decodeResource(resources, appInfo.icon, options);
+
+				final int pixels = Math.round(Util.dipToPixels(context, 48));
+				options.inSampleSize = Util.calculateInSampleSize(options, pixels, pixels);
+				options.inJustDecodeBounds = false;
+				return BitmapFactory.decodeResource(resources, appInfo.icon, options);
+			} catch (NameNotFoundException ex) {
+				Util.bug(null, ex);
+				return null;
+			}
+		} else
+			return null;
 	}
 
 	public boolean hasInternet(Context context) {
-		if (!mInternetDetermined) {
+		if (mInternet == null) {
+			mInternet = false;
 			PackageManager pm = context.getPackageManager();
 			for (ApplicationInfo appInfo : mMapAppInfo.values())
 				if (pm.checkPermission("android.permission.INTERNET", appInfo.packageName) == PackageManager.PERMISSION_GRANTED) {
 					mInternet = true;
 					break;
 				}
-			mInternetDetermined = true;
 		}
 		return mInternet;
 	}
 
 	public boolean isFrozen(Context context) {
-		if (!mFrozenDetermined) {
+		if (mFrozen == null) {
 			PackageManager pm = context.getPackageManager();
 			boolean enabled = false;
 			for (ApplicationInfo appInfo : mMapAppInfo.values())
@@ -181,7 +209,6 @@ public class ApplicationInfoEx implements Comparable<ApplicationInfoEx> {
 				} catch (IllegalArgumentException ignored) {
 				}
 			mFrozen = !enabled;
-			mFrozenDetermined = true;
 		}
 		return mFrozen;
 	}
@@ -190,8 +217,10 @@ public class ApplicationInfoEx implements Comparable<ApplicationInfoEx> {
 		return mUid;
 	}
 
+	@SuppressLint("FieldGetter")
 	public int getState(Context context) {
-		return Integer.parseInt(PrivacyManager.getSetting(-getUid(), PrivacyManager.cSettingState, "1", false));
+		return Integer.parseInt(PrivacyManager.getSetting(-getUid(), PrivacyManager.cSettingState,
+				Integer.toString(STATE_CHANGED)));
 	}
 
 	public long getInstallTime(Context context) {
@@ -228,8 +257,9 @@ public class ApplicationInfoEx implements Comparable<ApplicationInfoEx> {
 		return mUpdateTime;
 	}
 
+	@SuppressLint("FieldGetter")
 	public long getModificationTime(Context context) {
-		return Long.parseLong(PrivacyManager.getSetting(-getUid(), PrivacyManager.cSettingModifyTime, "0", false));
+		return Long.parseLong(PrivacyManager.getSetting(-getUid(), PrivacyManager.cSettingModifyTime, "0"));
 	}
 
 	public boolean isSystem() {
@@ -258,6 +288,7 @@ public class ApplicationInfoEx implements Comparable<ApplicationInfoEx> {
 	}
 
 	@Override
+	@SuppressLint("FieldGetter")
 	public String toString() {
 		return String.format("%d %s", getUid(), TextUtils.join(", ", getApplicationName()));
 	}

@@ -25,8 +25,8 @@ public class XWebSettings extends XHook {
 	// public synchronized String getUserAgentString()
 	// public synchronized void setUserAgent(int ua)
 	// public synchronized void setUserAgentString (String ua)
-	// frameworks/base/core/java/android/webkit/WebSettings.java
 	// http://developer.android.com/reference/android/webkit/WebSettings.html
+	// http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.0.2_r1/android/webkit/WebSettings.java
 
 	private enum Methods {
 		getDefaultUserAgent, getUserAgent, getUserAgentString, setUserAgent, setUserAgentString
@@ -35,6 +35,7 @@ public class XWebSettings extends XHook {
 	public static List<XHook> getInstances(Object instance) {
 		String className = instance.getClass().getName();
 		Util.log(null, Log.INFO, "Hooking class=" + className + " uid=" + Binder.getCallingUid());
+
 		List<XHook> listHook = new ArrayList<XHook>();
 		listHook.add(new XWebSettings(Methods.getDefaultUserAgent, PrivacyManager.cView, className));
 		listHook.add(new XWebSettings(Methods.getUserAgent, PrivacyManager.cView, className));
@@ -46,37 +47,42 @@ public class XWebSettings extends XHook {
 
 	@Override
 	protected void before(XParam param) throws Throwable {
-		if (mMethod == Methods.getDefaultUserAgent) {
+		switch (mMethod) {
+		case getDefaultUserAgent:
 			int uid = Binder.getCallingUid();
 			if (getRestricted(uid)) {
 				String ua = (String) PrivacyManager.getDefacedProp(Binder.getCallingUid(), "UA");
 				param.setResult(ua);
 			}
+			break;
 
-		} else if (mMethod == Methods.getUserAgent) {
+		case getUserAgent:
 			if (isRestricted(param))
 				param.setResult(-1); // User defined
+			break;
 
-		} else if (mMethod == Methods.getUserAgentString) {
-			if (isRestricted(param)) {
+		case getUserAgentString:
+			if (isRestrictedExtra(param, (String) param.getResult())) {
 				String ua = (String) PrivacyManager.getDefacedProp(Binder.getCallingUid(), "UA");
 				param.setResult(ua);
 			}
+			break;
 
-		} else if (mMethod == Methods.setUserAgent) {
+		case setUserAgent:
 			if (param.args.length > 0)
 				if (isRestricted(param))
 					param.args[0] = -1; // User defined
+			break;
 
-		} else if (mMethod == Methods.setUserAgentString) {
+		case setUserAgentString:
 			if (param.args.length > 0)
 				if (isRestricted(param)) {
 					String ua = (String) PrivacyManager.getDefacedProp(Binder.getCallingUid(), "UA");
 					param.args[0] = ua;
 				}
+			break;
 
-		} else
-			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());
+		}
 	}
 
 	@Override

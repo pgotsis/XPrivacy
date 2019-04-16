@@ -46,6 +46,9 @@ import org.xmlpull.v1.XmlSerializer;
 import android.accounts.Account;
 import android.accounts.AccountManager;
 import android.annotation.SuppressLint;
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.ProgressDialog;
 import android.app.AlertDialog;
 import android.content.Context;
@@ -53,6 +56,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.res.TypedArray;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
@@ -64,6 +68,8 @@ import android.os.PowerManager;
 import android.os.Process;
 import android.provider.ContactsContract;
 import android.provider.Settings.Secure;
+import android.support.v4.app.NotificationCompat;
+import android.support.v7.widget.Toolbar;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.Patterns;
@@ -80,11 +86,14 @@ import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
+import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.RadioGroup.OnCheckedChangeListener;
 import android.widget.TextView;
 import android.widget.EditText;
 import android.widget.Toast;
 
+@SuppressLint("Wakelock")
 public class ActivityShare extends ActivityBase {
 	private int mActionId;
 	private AppListAdapter mAppAdapter;
@@ -93,7 +102,7 @@ public class ActivityShare extends ActivityBase {
 	private boolean mAbort = false;
 	private int mProgressCurrent;
 	private int mProgressWidth = 0;
-	private String mFileName;
+	private String mFileName = null;
 	private boolean mInteractive = false;
 
 	private static final int STATE_WAITING = 0;
@@ -107,6 +116,7 @@ public class ActivityShare extends ActivityBase {
 	public static final String cRestriction = "Restriction";
 	public static final String cInteractive = "Interactive";
 	public static final String cChoice = "Choice";
+	public static final String cFileName = "FileName";
 	public static final String HTTP_BASE_URL = "http://crowd.xprivacy.eu/";
 	public static final String HTTPS_BASE_URL = "https://crowd.xprivacy.eu/";
 
@@ -151,6 +161,8 @@ public class ActivityShare extends ActivityBase {
 		final int[] uids = (extras != null && extras.containsKey(cUidList) ? extras.getIntArray(cUidList) : new int[0]);
 		final String restrictionName = (extras != null ? extras.getString(cRestriction) : null);
 		int choice = (extras != null && extras.containsKey(cChoice) ? extras.getInt(cChoice) : -1);
+		if (action.equals(ACTION_EXPORT))
+			mFileName = (extras != null && extras.containsKey(cFileName) ? extras.getString(cFileName) : null);
 
 		// License check
 		if (action.equals(ACTION_IMPORT) || action.equals(ACTION_EXPORT)) {
@@ -159,7 +171,7 @@ public class ActivityShare extends ActivityBase {
 				finish();
 				return;
 			}
-		} else if (action.equals(ACTION_FETCH)) {
+		} else if (action.equals(ACTION_FETCH) || (action.equals(ACTION_TOGGLE) && uids.length > 1)) {
 			if (Util.hasProLicense(this) == null) {
 				Util.viewUri(this, ActivityMain.cProUri);
 				finish();
@@ -173,20 +185,24 @@ public class ActivityShare extends ActivityBase {
 			return;
 		}
 
-		// Check whether we need a ui
+		// Check whether we need a user interface
 		if (extras != null && extras.containsKey(cInteractive) && extras.getBoolean(cInteractive, false))
 			mInteractive = true;
 
 		// Set layout
 		setContentView(R.layout.sharelist);
+		setSupportActionBar((Toolbar) findViewById(R.id.widgetToolbar));
 
 		// Reference controls
 		final TextView tvDescription = (TextView) findViewById(R.id.tvDescription);
+		final ScrollView svToggle = (ScrollView) findViewById(R.id.svToggle);
 		final RadioGroup rgToggle = (RadioGroup) findViewById(R.id.rgToggle);
+		final Spinner spRestriction = (Spinner) findViewById(R.id.spRestriction);
 		RadioButton rbClear = (RadioButton) findViewById(R.id.rbClear);
 		RadioButton rbTemplateFull = (RadioButton) findViewById(R.id.rbTemplateFull);
 		RadioButton rbODEnable = (RadioButton) findViewById(R.id.rbEnableOndemand);
 		RadioButton rbODDisable = (RadioButton) findViewById(R.id.rbDisableOndemand);
+		final Spinner spTemplate = (Spinner) findViewById(R.id.spTemplate);
 		final CheckBox cbClear = (CheckBox) findViewById(R.id.cbClear);
 		final Button btnOk = (Button) findViewById(R.id.btnOk);
 		final Button btnCancel = (Button) findViewById(R.id.btnCancel);
@@ -194,23 +210,57 @@ public class ActivityShare extends ActivityBase {
 		// Set title
 		if (action.equals(ACTION_TOGGLE)) {
 			mActionId = R.string.menu_toggle;
-			setTitle(R.string.menu_toggle);
+			getSupportActionBar().setSubtitle(R.string.menu_toggle);
 		} else if (action.equals(ACTION_IMPORT)) {
 			mActionId = R.string.menu_import;
-			setTitle(R.string.menu_import);
+			getSupportActionBar().setSubtitle(R.string.menu_import);
 		} else if (action.equals(ACTION_EXPORT)) {
 			mActionId = R.string.menu_export;
-			setTitle(R.string.menu_export);
+			getSupportActionBar().setSubtitle(R.string.menu_export);
 		} else if (action.equals(ACTION_FETCH)) {
 			mActionId = R.string.menu_fetch;
-			setTitle(R.string.menu_fetch);
+			getSupportActionBar().setSubtitle(R.string.menu_fetch);
 		} else if (action.equals(ACTION_SUBMIT)) {
 			mActionId = R.string.menu_submit;
-			setTitle(R.string.menu_submit);
+			getSupportActionBar().setSubtitle(R.string.menu_submit);
 		} else {
 			finish();
 			return;
 		}
+
+		// Get localized restriction name
+		List<String> listRestrictionName = new ArrayList<String>(PrivacyManager.getRestrictions(this).navigableKeySet());
+		listRestrictionName.add(0, getString(R.string.menu_all));
+
+		// Build restriction adapter
+		SpinnerAdapter saRestriction = new SpinnerAdapter(this, android.R.layout.simple_spinner_item);
+		saRestriction.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+		saRestriction.addAll(listRestrictionName);
+
+		// Setup restriction spinner
+		int pos = 0;
+		if (restrictionName != null)
+			for (String restriction : PrivacyManager.getRestrictions(this).values()) {
+				pos++;
+				if (restrictionName.equals(restriction))
+					break;
+			}
+
+		spRestriction.setAdapter(saRestriction);
+		spRestriction.setSelection(pos);
+
+		// Build template adapter
+		SpinnerAdapter spAdapter = new SpinnerAdapter(this, android.R.layout.simple_spinner_item);
+		spAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+		String defaultName = PrivacyManager.getSetting(userId, Meta.cTypeTemplateName, "0",
+				getString(R.string.title_default));
+		spAdapter.add(defaultName);
+		for (int i = 1; i <= 4; i++) {
+			String alternateName = PrivacyManager.getSetting(userId, Meta.cTypeTemplateName, Integer.toString(i),
+					getString(R.string.title_alternate) + " " + i);
+			spAdapter.add(alternateName);
+		}
+		spTemplate.setAdapter(spAdapter);
 
 		// Build application list
 		AppListTask appListTask = new AppListTask();
@@ -224,18 +274,19 @@ public class ActivityShare extends ActivityBase {
 			boolean hasIntent = Util.isIntentAvailable(ActivityShare.this, file);
 
 			// Get file name
-			if (action.equals(ACTION_EXPORT)) {
-				String packageName = null;
-				if (uids.length == 1)
-					try {
-						ApplicationInfoEx appInfo = new ApplicationInfoEx(this, uids[0]);
-						packageName = appInfo.getPackageName().get(0);
-					} catch (Throwable ex) {
-						Util.bug(null, ex);
-					}
-				mFileName = getFileName(this, hasIntent, packageName);
-			} else
-				mFileName = (hasIntent ? null : getFileName(this, false, null));
+			if (mFileName == null)
+				if (action.equals(ACTION_EXPORT)) {
+					String packageName = null;
+					if (uids.length == 1)
+						try {
+							ApplicationInfoEx appInfo = new ApplicationInfoEx(this, uids[0]);
+							packageName = appInfo.getPackageName().get(0);
+						} catch (Throwable ex) {
+							Util.bug(null, ex);
+						}
+					mFileName = getFileName(this, hasIntent, packageName);
+				} else
+					mFileName = (hasIntent ? null : getFileName(this, false, null));
 
 			if (mFileName == null)
 				fileChooser();
@@ -246,39 +297,32 @@ public class ActivityShare extends ActivityBase {
 				cbClear.setVisibility(View.VISIBLE);
 
 		} else if (action.equals(ACTION_FETCH)) {
-			tvDescription.setText(getBaseURL(ActivityShare.this));
+			tvDescription.setText(getBaseURL());
 			cbClear.setVisibility(View.VISIBLE);
 
 		} else if (action.equals(ACTION_TOGGLE)) {
-			// Show category
-			if (restrictionName == null)
-				tvDescription.setText(R.string.menu_all);
-			else {
-				int stringId = getResources().getIdentifier("restrict_" + restrictionName, "string", getPackageName());
-				tvDescription.setText(stringId);
-			}
-			rgToggle.setVisibility(View.VISIBLE);
+			tvDescription.setVisibility(View.GONE);
+			spRestriction.setVisibility(View.VISIBLE);
+			svToggle.setVisibility(View.VISIBLE);
 
 			// Listen for radio button
 			rgToggle.setOnCheckedChangeListener(new OnCheckedChangeListener() {
 				@Override
 				public void onCheckedChanged(RadioGroup group, int checkedId) {
 					btnOk.setEnabled(checkedId >= 0);
-					if (restrictionName == null
-							|| (checkedId == R.id.rbEnableOndemand || checkedId == R.id.rbDisableOndemand))
-						tvDescription.setText(R.string.menu_all);
-					else {
-						int stringId = getResources().getIdentifier("restrict_" + restrictionName, "string",
-								getPackageName());
-						tvDescription.setText(stringId);
-					}
+					spRestriction.setVisibility(checkedId == R.id.rbEnableOndemand
+							|| checkedId == R.id.rbDisableOndemand ? View.GONE : View.VISIBLE);
+
+					spTemplate
+							.setVisibility(checkedId == R.id.rbTemplateCategory || checkedId == R.id.rbTemplateFull
+									|| checkedId == R.id.rbTemplateMergeSet || checkedId == R.id.rbTemplateMergeReset ? View.VISIBLE
+									: View.GONE);
 				}
 			});
 
-			boolean dangerous = PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingDangerous, false, false);
-			boolean ondemand = PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingOnDemand, true, false);
-			rbODEnable.setVisibility(dangerous && ondemand ? View.VISIBLE : View.GONE);
-			rbODDisable.setVisibility(dangerous && ondemand ? View.VISIBLE : View.GONE);
+			boolean ondemand = PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingOnDemand, true);
+			rbODEnable.setVisibility(ondemand ? View.VISIBLE : View.GONE);
+			rbODDisable.setVisibility(ondemand ? View.VISIBLE : View.GONE);
 
 			if (choice == CHOICE_CLEAR)
 				rbClear.setChecked(true);
@@ -286,7 +330,7 @@ public class ActivityShare extends ActivityBase {
 				rbTemplateFull.setChecked(true);
 
 		} else
-			tvDescription.setText(getBaseURL(ActivityShare.this));
+			tvDescription.setText(getBaseURL());
 
 		if (mInteractive) {
 			// Enable ok
@@ -305,6 +349,9 @@ public class ActivityShare extends ActivityBase {
 						mRunning = true;
 						for (int i = 0; i < rgToggle.getChildCount(); i++)
 							((RadioButton) rgToggle.getChildAt(i)).setEnabled(false);
+						int pos = spRestriction.getSelectedItemPosition();
+						String restrictionName = (pos == 0 ? null : (String) PrivacyManager
+								.getRestrictions(ActivityShare.this).values().toArray()[pos - 1]);
 						new ToggleTask().executeOnExecutor(mExecutor, restrictionName);
 
 						// Import
@@ -335,8 +382,8 @@ public class ActivityShare extends ActivityBase {
 								mRunning = true;
 								new SubmitTask().executeOnExecutor(mExecutor);
 							} else {
-								String message = getString(R.string.msg_limit, ActivityShare.cSubmitLimit + 1);
-								Toast.makeText(ActivityShare.this, message, Toast.LENGTH_SHORT).show();
+								String message = getString(R.string.msg_limit, cSubmitLimit + 1);
+								Toast.makeText(ActivityShare.this, message, Toast.LENGTH_LONG).show();
 								btnOk.setEnabled(false);
 							}
 						}
@@ -344,12 +391,8 @@ public class ActivityShare extends ActivityBase {
 				}
 			});
 
-		} else {
-			// Hide ok button and separator
-			btnOk.setVisibility(View.GONE);
-			final View vButtonSeparator = findViewById(R.id.vButtonSeparator);
-			vButtonSeparator.setVisibility(View.GONE);
-		}
+		} else
+			btnOk.setEnabled(false);
 
 		// Listen for cancel
 		btnCancel.setOnClickListener(new Button.OnClickListener() {
@@ -357,7 +400,7 @@ public class ActivityShare extends ActivityBase {
 			public void onClick(View v) {
 				if (mRunning) {
 					mAbort = true;
-					Toast.makeText(ActivityShare.this, getString(R.string.msg_abort), Toast.LENGTH_SHORT).show();
+					Toast.makeText(ActivityShare.this, getString(R.string.msg_abort), Toast.LENGTH_LONG).show();
 				} else
 					finish();
 			}
@@ -431,6 +474,12 @@ public class ActivityShare extends ActivityBase {
 
 	// Adapters
 
+	private class SpinnerAdapter extends ArrayAdapter<String> {
+		public SpinnerAdapter(Context context, int textViewResourceId) {
+			super(context, textViewResourceId);
+		}
+	}
+
 	private class AppListAdapter extends ArrayAdapter<AppState> {
 		private LayoutInflater mInflater = (LayoutInflater) getSystemService(Context.LAYOUT_INFLATER_SERVICE);
 
@@ -475,6 +524,7 @@ public class ActivityShare extends ActivityBase {
 		}
 
 		@Override
+		@SuppressLint("InflateParams")
 		public View getView(int position, View convertView, ViewGroup parent) {
 			ViewHolder holder;
 			if (convertView == null) {
@@ -503,9 +553,8 @@ public class ActivityShare extends ActivityBase {
 				@Override
 				public void onClick(View view) {
 					// Packages can be selected on the web site
-					Util.viewUri(ActivityShare.this, Uri.parse(String.format(
-							ActivityShare.getBaseURL(ActivityShare.this) + "?package_name=%s", xApp.appInfo
-									.getPackageName().get(0))));
+					Util.viewUri(ActivityShare.this, Uri.parse(String.format(getBaseURL() + "?package_name=%s",
+							xApp.appInfo.getPackageName().get(0))));
 				}
 			});
 
@@ -583,14 +632,20 @@ public class ActivityShare extends ActivityBase {
 			return apps;
 		}
 
+		@SuppressWarnings("deprecation")
 		@Override
 		protected void onPreExecute() {
 			super.onPreExecute();
+
+			TypedArray ta = getTheme().obtainStyledAttributes(new int[] { R.attr.progress_horizontal });
+			int progress_horizontal = ta.getResourceId(0, 0);
+			ta.recycle();
 
 			// Show progress dialog
 			mProgressDialog = new ProgressDialog(ActivityShare.this);
 			mProgressDialog.setMessage(getString(R.string.msg_loading));
 			mProgressDialog.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
+			mProgressDialog.setProgressDrawable(getResources().getDrawable(progress_horizontal));
 			mProgressDialog.setProgressNumberFormat(null);
 			mProgressDialog.setCancelable(false);
 			mProgressDialog.setCanceledOnTouchOutside(false);
@@ -636,6 +691,10 @@ public class ActivityShare extends ActivityBase {
 				List<Integer> lstUid = mAppAdapter.getListUid();
 				final String restrictionName = params[0];
 				int actionId = ((RadioGroup) ActivityShare.this.findViewById(R.id.rgToggle)).getCheckedRadioButtonId();
+				Spinner spTemplate = ((Spinner) ActivityShare.this.findViewById(R.id.spTemplate));
+				String templateName = Meta.cTypeTemplate;
+				if (spTemplate.getSelectedItemPosition() > 0)
+					templateName = Meta.cTypeTemplate + spTemplate.getSelectedItemPosition();
 
 				for (Integer uid : lstUid)
 					try {
@@ -648,8 +707,13 @@ public class ActivityShare extends ActivityBase {
 
 						List<Boolean> oldState = PrivacyManager.getRestartStates(uid, restrictionName);
 
-						if (actionId == R.id.rbClear)
+						if (actionId == R.id.rbClear) {
 							PrivacyManager.deleteRestrictions(uid, restrictionName, (restrictionName == null));
+							if (restrictionName == null) {
+								PrivacyManager.deleteUsage(uid);
+								PrivacyManager.deleteSettings(uid);
+							}
+						}
 
 						else if (actionId == R.id.rbRestrict) {
 							PrivacyManager.setRestriction(uid, restrictionName, null, true, false);
@@ -657,10 +721,16 @@ public class ActivityShare extends ActivityBase {
 						}
 
 						else if (actionId == R.id.rbTemplateCategory)
-							PrivacyManager.applyTemplate(uid, restrictionName, false);
+							PrivacyManager.applyTemplate(uid, templateName, restrictionName, false, true, false);
 
 						else if (actionId == R.id.rbTemplateFull)
-							PrivacyManager.applyTemplate(uid, restrictionName, true);
+							PrivacyManager.applyTemplate(uid, templateName, restrictionName, true, true, false);
+
+						else if (actionId == R.id.rbTemplateMergeSet)
+							PrivacyManager.applyTemplate(uid, templateName, restrictionName, true, false, false);
+
+						else if (actionId == R.id.rbTemplateMergeReset)
+							PrivacyManager.applyTemplate(uid, templateName, restrictionName, true, false, true);
 
 						else if (actionId == R.id.rbEnableOndemand) {
 							PrivacyManager.setSetting(uid, PrivacyManager.cSettingOnDemand, Boolean.toString(true));
@@ -741,7 +811,7 @@ public class ActivityShare extends ActivityBase {
 
 					// Process global settings
 					if (listUid.size() > 1) {
-						List<PSetting> listGlobalSetting = PrivacyManager.getSettingList(0);
+						List<PSetting> listGlobalSetting = PrivacyManager.getSettingList(0, null);
 						for (PSetting setting : listGlobalSetting) {
 							// Serialize setting
 							serializer.startTag(null, "Setting");
@@ -764,7 +834,7 @@ public class ActivityShare extends ActivityBase {
 							setState(uid, STATE_RUNNING, null);
 
 							// Process application settings
-							List<PSetting> listAppSetting = PrivacyManager.getSettingList(uid);
+							List<PSetting> listAppSetting = PrivacyManager.getSettingList(uid, null);
 							for (PSetting setting : listAppSetting) {
 								// Bind accounts/contacts to same device
 								if (Meta.cTypeAccount.equals(setting.type) || Meta.cTypeContact.equals(setting.type))
@@ -782,7 +852,6 @@ public class ActivityShare extends ActivityBase {
 							// Process restrictions
 							for (String restrictionName : PrivacyManager.getRestrictions()) {
 								// Category
-								// TODO: use getRestrictionList
 								PRestriction crestricted = PrivacyManager.getRestrictionEx(uid, restrictionName, null);
 								serializer.startTag(null, "Restriction");
 								serializer.attribute(null, "Id", Integer.toString(uid));
@@ -792,7 +861,7 @@ public class ActivityShare extends ActivityBase {
 								serializer.endTag(null, "Restriction");
 
 								// Methods
-								for (Hook md : PrivacyManager.getHooks(restrictionName)) {
+								for (Hook md : PrivacyManager.getHooks(restrictionName, null)) {
 									PRestriction mrestricted = PrivacyManager.getRestrictionEx(uid, restrictionName,
 											md.getName());
 									if ((crestricted.restricted && !mrestricted.restricted)
@@ -1016,6 +1085,15 @@ public class ActivityShare extends ActivityBase {
 					String name = attributes.getValue("Name");
 					String value = attributes.getValue("Value");
 
+					// Failsafe
+					if (name == null)
+						return;
+
+					// Do not import version number
+					if (name.equals(PrivacyManager.cSettingVersion))
+						return;
+
+					// Decode legacy type
 					if (name.startsWith("Account.") || name.startsWith("Application.") || name.startsWith("Contact.")
 							|| name.startsWith("Template.") || name.startsWith("Whitelist.")) {
 						name = name.replace("Whitelist.", "");
@@ -1153,12 +1231,17 @@ public class ActivityShare extends ActivityBase {
 
 		@Override
 		public void endElement(String uri, String localName, String qName) {
-			if (qName.equals("XPrivacy"))
+			if (qName.equals("XPrivacy")) {
 				if (lastUid > 0) {
 					PrivacyManager.updateState(lastUid);
 					boolean restart = !PrivacyManager.getRestartStates(lastUid, null).equals(mOldState);
 					setState(lastUid, STATE_SUCCESS, restart ? getString(R.string.msg_restart) : null);
 				}
+
+				// Cleanup salt
+				int userId = Util.getUserId(Process.myUid());
+				PrivacyManager.removeLegacySalt(userId);
+			}
 		}
 
 		private int getUid(int id) {
@@ -1218,9 +1301,7 @@ public class ActivityShare extends ActivityBase {
 				String[] license = Util.getProLicenseUnchecked();
 				String android_id = Secure.getString(ActivityShare.this.getContentResolver(), Secure.ANDROID_ID);
 				PackageInfo xInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
-				String confidence = PrivacyManager.getSetting(userId, PrivacyManager.cSettingConfidence, "", false);
-				boolean dangerous = PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingDangerous, false,
-						false);
+				String confidence = PrivacyManager.getSetting(userId, PrivacyManager.cSettingConfidence, "");
 
 				// Initialize progress
 				mProgressCurrent = 0;
@@ -1229,114 +1310,108 @@ public class ActivityShare extends ActivityBase {
 				for (ApplicationInfoEx appInfo : lstApp)
 					try {
 						publishProgress(++mProgressCurrent, lstApp.size() + 1);
-						if (!appInfo.isSystem() || lstApp.size() == 1) {
-							if (mAbort)
-								throw new AbortException(ActivityShare.this);
 
-							setState(appInfo.getUid(), STATE_RUNNING, ActivityShare.this.getString(R.string.menu_fetch));
+						if (mAbort)
+							throw new AbortException(ActivityShare.this);
 
-							JSONArray appName = new JSONArray();
-							for (String name : appInfo.getApplicationName())
-								appName.put(name);
+						setState(appInfo.getUid(), STATE_RUNNING, ActivityShare.this.getString(R.string.menu_fetch));
 
-							JSONArray pkgName = new JSONArray();
-							for (String name : appInfo.getPackageName())
-								pkgName.put(name);
+						JSONArray appName = new JSONArray();
+						for (String name : appInfo.getApplicationName())
+							appName.put(name);
 
-							JSONArray pkgVersion = new JSONArray();
-							for (String version : appInfo.getPackageVersionName(ActivityShare.this))
-								pkgVersion.put(version);
+						JSONArray pkgName = new JSONArray();
+						for (String name : appInfo.getPackageName())
+							pkgName.put(name);
 
-							// Encode package
-							JSONObject jRoot = new JSONObject();
-							jRoot.put("protocol_version", cProtocolVersion);
-							jRoot.put("android_id", Util.md5(android_id).toLowerCase());
-							jRoot.put("android_sdk", Build.VERSION.SDK_INT);
-							jRoot.put("xprivacy_version", xInfo.versionCode);
-							jRoot.put("application_name", appName);
-							jRoot.put("package_name", pkgName);
-							jRoot.put("package_version", pkgVersion);
-							jRoot.put("email", license[1]);
-							jRoot.put("signature", license[2]);
-							jRoot.put("confidence", confidence);
+						JSONArray pkgVersion = new JSONArray();
+						for (String version : appInfo.getPackageVersionName(ActivityShare.this))
+							pkgVersion.put(version);
 
-							// Fetch
-							HttpParams httpParams = new BasicHttpParams();
-							HttpConnectionParams.setConnectionTimeout(httpParams, TIMEOUT_MILLISEC);
-							HttpConnectionParams.setSoTimeout(httpParams, TIMEOUT_MILLISEC);
-							HttpClient httpclient = new DefaultHttpClient(httpParams);
+						// Encode package
+						JSONObject jRoot = new JSONObject();
+						jRoot.put("protocol_version", cProtocolVersion);
+						jRoot.put("android_id", Util.md5(android_id).toLowerCase());
+						jRoot.put("android_sdk", Build.VERSION.SDK_INT);
+						jRoot.put("xprivacy_version", xInfo.versionCode);
+						jRoot.put("application_name", appName);
+						jRoot.put("package_name", pkgName);
+						jRoot.put("package_version", pkgVersion);
+						jRoot.put("email", license[1]);
+						jRoot.put("signature", license[2]);
+						jRoot.put("confidence", confidence);
 
-							HttpPost httpost = new HttpPost(getBaseURL(null) + "?format=json&action=fetch");
-							httpost.setEntity(new ByteArrayEntity(jRoot.toString().getBytes("UTF-8")));
-							httpost.setHeader("Accept", "application/json");
-							httpost.setHeader("Content-type", "application/json");
-							HttpResponse response = httpclient.execute(httpost);
-							StatusLine statusLine = response.getStatusLine();
+						// Fetch
+						HttpParams httpParams = new BasicHttpParams();
+						HttpConnectionParams.setConnectionTimeout(httpParams, TIMEOUT_MILLISEC);
+						HttpConnectionParams.setSoTimeout(httpParams, TIMEOUT_MILLISEC);
+						HttpClient httpclient = new DefaultHttpClient(httpParams);
 
-							if (mAbort)
-								throw new AbortException(ActivityShare.this);
+						HttpPost httpost = new HttpPost(getBaseURL() + "?format=json&action=fetch");
+						httpost.setEntity(new ByteArrayEntity(jRoot.toString().getBytes("UTF-8")));
+						httpost.setHeader("Accept", "application/json");
+						httpost.setHeader("Content-type", "application/json");
+						HttpResponse response = httpclient.execute(httpost);
+						StatusLine statusLine = response.getStatusLine();
 
-							setState(appInfo.getUid(), STATE_RUNNING,
-									ActivityShare.this.getString(R.string.msg_applying));
+						if (mAbort)
+							throw new AbortException(ActivityShare.this);
 
-							if (statusLine.getStatusCode() == HttpStatus.SC_OK) {
-								// Succeeded
-								ByteArrayOutputStream out = new ByteArrayOutputStream();
-								response.getEntity().writeTo(out);
-								out.close();
+						setState(appInfo.getUid(), STATE_RUNNING, ActivityShare.this.getString(R.string.msg_applying));
 
-								// Deserialize
-								JSONObject status = new JSONObject(out.toString("UTF-8"));
-								if (status.getBoolean("ok")) {
-									JSONArray settings = status.getJSONArray("settings");
-									// Delete existing restrictions
-									List<Boolean> oldState = PrivacyManager.getRestartStates(appInfo.getUid(), null);
+						if (statusLine.getStatusCode() == HttpStatus.SC_OK) {
+							// Succeeded
+							ByteArrayOutputStream out = new ByteArrayOutputStream();
+							response.getEntity().writeTo(out);
+							out.close();
 
-									// Clear existing restriction
-									if (clear)
-										PrivacyManager.deleteRestrictions(appInfo.getUid(), null, true);
+							// Deserialize
+							JSONObject status = new JSONObject(out.toString("UTF-8"));
+							if (status.getBoolean("ok")) {
+								JSONArray settings = status.getJSONArray("settings");
+								// Delete existing restrictions
+								List<Boolean> oldState = PrivacyManager.getRestartStates(appInfo.getUid(), null);
 
-									// Set fetched restrictions
-									List<PRestriction> listRestriction = new ArrayList<PRestriction>();
-									for (int i = 0; i < settings.length(); i++) {
-										JSONObject entry = settings.getJSONObject(i);
-										String restrictionName = entry.getString("restriction");
-										String methodName = entry.has("method") ? entry.getString("method") : null;
-										Hook hook = (methodName == null ? null : PrivacyManager.getHook(
-												restrictionName, methodName));
-										if (dangerous || hook == null || !hook.isDangerous()) {
-											int voted_restricted = entry.getInt("restricted");
-											int voted_not_restricted = entry.getInt("not_restricted");
-											boolean restricted = (voted_restricted > voted_not_restricted);
-											if (clear || restricted)
-												listRestriction.add(new PRestriction(appInfo.getUid(), restrictionName,
-														methodName, restricted));
-										}
-									}
-									PrivacyManager.setRestrictionList(listRestriction);
-									List<Boolean> newState = PrivacyManager.getRestartStates(appInfo.getUid(), null);
+								// Clear existing restriction
+								if (clear)
+									PrivacyManager.deleteRestrictions(appInfo.getUid(), null, true);
 
-									// Mark as new/changed
-									PrivacyManager.setSetting(appInfo.getUid(), PrivacyManager.cSettingState,
-											Integer.toString(ActivityMain.STATE_ATTENTION));
-
-									// Change app modification time
-									PrivacyManager.setSetting(appInfo.getUid(), PrivacyManager.cSettingModifyTime,
-											Long.toString(System.currentTimeMillis()));
-
-									setState(appInfo.getUid(), STATE_SUCCESS,
-											!newState.equals(oldState) ? getString(R.string.msg_restart) : null);
-								} else {
-									int errno = status.getInt("errno");
-									String message = status.getString("error");
-									ServerException ex = new ServerException(ActivityShare.this, errno, message);
-									setState(appInfo.getUid(), STATE_FAILURE, ex.getMessage());
+								// Set fetched restrictions
+								List<PRestriction> listRestriction = new ArrayList<PRestriction>();
+								for (int i = 0; i < settings.length(); i++) {
+									JSONObject entry = settings.getJSONObject(i);
+									String restrictionName = entry.getString("restriction");
+									String methodName = entry.has("method") ? entry.getString("method") : null;
+									int voted_restricted = entry.getInt("restricted");
+									int voted_not_restricted = entry.getInt("not_restricted");
+									boolean restricted = (voted_restricted > voted_not_restricted);
+									if (clear || restricted)
+										listRestriction.add(new PRestriction(appInfo.getUid(), restrictionName,
+												methodName, restricted));
 								}
+								PrivacyManager.setRestrictionList(listRestriction);
+								List<Boolean> newState = PrivacyManager.getRestartStates(appInfo.getUid(), null);
+
+								// Mark as new/changed
+								PrivacyManager.setSetting(appInfo.getUid(), PrivacyManager.cSettingState,
+										Integer.toString(ApplicationInfoEx.STATE_ATTENTION));
+
+								// Change app modification time
+								PrivacyManager.setSetting(appInfo.getUid(), PrivacyManager.cSettingModifyTime,
+										Long.toString(System.currentTimeMillis()));
+
+								setState(appInfo.getUid(), STATE_SUCCESS,
+										!newState.equals(oldState) ? getString(R.string.msg_restart) : null);
 							} else {
-								// Failed
-								response.getEntity().getContent().close();
-								throw new IOException(statusLine.getReasonPhrase());
+								int errno = status.getInt("errno");
+								String message = status.getString("error");
+								ServerException ex = new ServerException(ActivityShare.this, errno, message);
+								setState(appInfo.getUid(), STATE_FAILURE, ex.getMessage());
 							}
+						} else {
+							// Failed
+							response.getEntity().getContent().close();
+							throw new IOException(statusLine.getReasonPhrase());
 						}
 					} catch (Throwable ex) {
 						setState(appInfo.getUid(), STATE_FAILURE, ex.getMessage());
@@ -1407,7 +1482,7 @@ public class ActivityShare extends ActivityBase {
 						for (Account account : accountManager.getAccounts()) {
 							String sha1 = Util.sha1(account.name + account.type);
 							boolean allowed = PrivacyManager.getSettingBool(appInfo.getUid(), Meta.cTypeAccount, sha1,
-									false, false);
+									false);
 							if (allowed) {
 								allowedAccounts = true;
 								break;
@@ -1420,7 +1495,7 @@ public class ActivityShare extends ActivityBase {
 								null))
 							for (String packageName : aAppInfo.getPackageName()) {
 								boolean allowed = PrivacyManager.getSettingBool(-appInfo.getUid(),
-										Meta.cTypeApplication, packageName, false, false);
+										Meta.cTypeApplication, packageName, false);
 								if (allowed) {
 									allowedApplications = true;
 									break;
@@ -1436,7 +1511,7 @@ public class ActivityShare extends ActivityBase {
 								while (cursor.moveToNext()) {
 									long id = cursor.getLong(cursor.getColumnIndex(ContactsContract.Contacts._ID));
 									boolean allowed = PrivacyManager.getSettingBool(-appInfo.getUid(),
-											Meta.cTypeContact, Long.toString(id), false, false);
+											Meta.cTypeContact, Long.toString(id), false);
 									if (allowed) {
 										allowedContacts = true;
 										break;
@@ -1447,13 +1522,12 @@ public class ActivityShare extends ActivityBase {
 							}
 
 						// Get white lists
-						Map<String, TreeMap<String, Boolean>> mapWhitelist = PrivacyManager.listWhitelisted(appInfo
-								.getUid());
+						Map<String, TreeMap<String, Boolean>> mapWhitelist = PrivacyManager.listWhitelisted(
+								appInfo.getUid(), null);
 
 						// Encode restrictions
 						JSONArray jSettings = new JSONArray();
 						for (String restrictionName : PrivacyManager.getRestrictions()) {
-							// TODO: use getRestrictionList
 							boolean restricted = PrivacyManager.getRestrictionEx(appInfo.getUid(), restrictionName,
 									null).restricted;
 							// Category
@@ -1471,7 +1545,7 @@ public class ActivityShare extends ActivityBase {
 							jSettings.put(jRestriction);
 
 							// Methods
-							for (Hook md : PrivacyManager.getHooks(restrictionName)) {
+							for (Hook md : PrivacyManager.getHooks(restrictionName, null)) {
 								boolean mRestricted = restricted
 										&& PrivacyManager.getRestrictionEx(appInfo.getUid(), restrictionName,
 												md.getName()).restricted;
@@ -1540,11 +1614,11 @@ public class ActivityShare extends ActivityBase {
 
 						// Submit
 						HttpParams httpParams = new BasicHttpParams();
-						HttpConnectionParams.setConnectionTimeout(httpParams, ActivityShare.TIMEOUT_MILLISEC);
-						HttpConnectionParams.setSoTimeout(httpParams, ActivityShare.TIMEOUT_MILLISEC);
+						HttpConnectionParams.setConnectionTimeout(httpParams, TIMEOUT_MILLISEC);
+						HttpConnectionParams.setSoTimeout(httpParams, TIMEOUT_MILLISEC);
 						HttpClient httpclient = new DefaultHttpClient(httpParams);
 
-						HttpPost httpost = new HttpPost(getBaseURL(null) + "?format=json&action=submit");
+						HttpPost httpost = new HttpPost(getBaseURL() + "?format=json&action=submit");
 						httpost.setEntity(new ByteArrayEntity(jRoot.toString().getBytes("UTF-8")));
 						httpost.setHeader("Accept", "application/json");
 						httpost.setHeader("Content-type", "application/json");
@@ -1560,7 +1634,7 @@ public class ActivityShare extends ActivityBase {
 							if (status.getBoolean("ok")) {
 								// Mark as shared
 								PrivacyManager.setSetting(appInfo.getUid(), PrivacyManager.cSettingState,
-										Integer.toString(ActivityMain.STATE_SHARED));
+										Integer.toString(ApplicationInfoEx.STATE_SHARED));
 								setState(appInfo.getUid(), STATE_SUCCESS, null);
 							} else {
 								int errno = status.getInt("errno");
@@ -1620,10 +1694,11 @@ public class ActivityShare extends ActivityBase {
 		}
 	}
 
+	@SuppressLint("InflateParams")
 	public static boolean registerDevice(final ActivityBase context) {
 		int userId = Util.getUserId(Process.myUid());
 		if (Util.hasProLicense(context) == null
-				&& !PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingRegistered, false, false)) {
+				&& !PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingRegistered, false)) {
 			// Get accounts
 			String email = null;
 			for (Account account : AccountManager.get(context).getAccounts())
@@ -1693,11 +1768,11 @@ public class ActivityShare extends ActivityBase {
 
 				// Submit
 				HttpParams httpParams = new BasicHttpParams();
-				HttpConnectionParams.setConnectionTimeout(httpParams, ActivityShare.TIMEOUT_MILLISEC);
-				HttpConnectionParams.setSoTimeout(httpParams, ActivityShare.TIMEOUT_MILLISEC);
+				HttpConnectionParams.setConnectionTimeout(httpParams, TIMEOUT_MILLISEC);
+				HttpConnectionParams.setSoTimeout(httpParams, TIMEOUT_MILLISEC);
 				HttpClient httpclient = new DefaultHttpClient(httpParams);
 
-				HttpPost httpost = new HttpPost(getBaseURL(null) + "device?format=json&action=register");
+				HttpPost httpost = new HttpPost(getBaseURL() + "device?format=json&action=register");
 				httpost.setEntity(new ByteArrayEntity(jRoot.toString().getBytes("UTF-8")));
 				httpost.setHeader("Accept", "application/json");
 				httpost.setHeader("Content-type", "application/json");
@@ -1774,6 +1849,143 @@ public class ActivityShare extends ActivityBase {
 		}
 	}
 
+	public static class UpdateTask extends AsyncTask<Object, Object, Object> {
+		private Context mContext;
+		private NotificationCompat.Builder builder;
+		private Notification notification;
+		private NotificationManager notificationManager;
+
+		public UpdateTask(Context context) {
+			mContext = context;
+			builder = new NotificationCompat.Builder(context);
+			notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+
+		}
+
+		@Override
+		protected void onPreExecute() {
+			// Build notification
+			builder.setSmallIcon(R.drawable.ic_launcher);
+			builder.setContentTitle(mContext.getString(R.string.app_name));
+			builder.setAutoCancel(false);
+			builder.setOngoing(true);
+		}
+
+		@Override
+		@SuppressLint("DefaultLocale")
+		protected Object doInBackground(Object... args) {
+			try {
+				// Notify
+				builder.setContentText(mContext.getString(R.string.title_update_checking));
+				builder.setWhen(System.currentTimeMillis());
+				notification = builder.build();
+				notificationManager.notify(Util.NOTIFY_UPDATE, notification);
+
+				// Encode package
+				String[] license = Util.getProLicenseUnchecked();
+				int userId = Util.getUserId(Process.myUid());
+				boolean test = PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingTestVersions, false);
+				String android_id = Secure.getString(mContext.getContentResolver(), Secure.ANDROID_ID);
+
+				JSONObject jRoot = new JSONObject();
+				jRoot.put("protocol_version", cProtocolVersion);
+				jRoot.put("android_id", Util.md5(android_id).toLowerCase());
+				jRoot.put("android_sdk", Build.VERSION.SDK_INT);
+				jRoot.put("xprivacy_version", Util.getSelfVersionCode(mContext));
+				jRoot.put("xprivacy_version_name", Util.getSelfVersionName(mContext));
+				jRoot.put("test_versions", test);
+				jRoot.put("email", license[1]);
+				jRoot.put("signature", license[2]);
+
+				// Update
+				HttpParams httpParams = new BasicHttpParams();
+				HttpConnectionParams.setConnectionTimeout(httpParams, TIMEOUT_MILLISEC);
+				HttpConnectionParams.setSoTimeout(httpParams, TIMEOUT_MILLISEC);
+				HttpClient httpclient = new DefaultHttpClient(httpParams);
+
+				HttpPost httpost = new HttpPost(getBaseURL() + "?format=json&action=update");
+				httpost.setEntity(new ByteArrayEntity(jRoot.toString().getBytes("UTF-8")));
+				httpost.setHeader("Accept", "application/json");
+				httpost.setHeader("Content-type", "application/json");
+				HttpResponse response = httpclient.execute(httpost);
+				StatusLine statusLine = response.getStatusLine();
+				if (statusLine.getStatusCode() == HttpStatus.SC_OK) {
+					String contentType = response.getFirstHeader("Content-Type").getValue();
+					if ("application/octet-stream".equals(contentType)) {
+						// Update notification
+						builder.setContentText(mContext.getString(R.string.title_update_downloading));
+						builder.setWhen(System.currentTimeMillis());
+						notification = builder.build();
+						notificationManager.notify(Util.NOTIFY_UPDATE, notification);
+
+						// Download APK
+						File folder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+						folder.mkdirs();
+						String fileName = response.getFirstHeader("Content-Disposition").getElements()[0]
+								.getParameterByName("filename").getValue();
+						File download = new File(folder, fileName);
+						FileOutputStream fos = null;
+						try {
+							fos = new FileOutputStream(download);
+							response.getEntity().writeTo(fos);
+						} finally {
+							if (fos != null)
+								fos.close();
+						}
+
+						return download;
+					} else if ("application/json".equals(contentType)) {
+						ByteArrayOutputStream out = new ByteArrayOutputStream();
+						response.getEntity().writeTo(out);
+						out.close();
+						throw new IOException(out.toString("UTF-8"));
+					} else
+						throw new IOException(contentType);
+				} else
+					return statusLine;
+			} catch (Throwable ex) {
+				Util.bug(null, ex);
+				return ex;
+			}
+		}
+
+		@Override
+		protected void onPostExecute(Object result) {
+			if (result instanceof StatusLine) {
+				notificationManager.cancel(Util.NOTIFY_UPDATE);
+				StatusLine status = (StatusLine) result;
+				if (status.getStatusCode() == 204) { // No Content
+					String none = mContext.getString(R.string.title_update_none);
+					Toast.makeText(mContext, none, Toast.LENGTH_LONG).show();
+				} else
+					Toast.makeText(mContext, status.getStatusCode() + " " + status.getReasonPhrase(), Toast.LENGTH_LONG)
+							.show();
+
+			} else if (result instanceof Throwable) {
+				notificationManager.cancel(Util.NOTIFY_UPDATE);
+				Throwable ex = (Throwable) result;
+				Toast.makeText(mContext, ex.toString(), Toast.LENGTH_LONG).show();
+
+			} else {
+				File download = (File) result;
+				Intent intent = new Intent(Intent.ACTION_VIEW);
+				intent.setDataAndType(Uri.fromFile(download), "application/vnd.android.package-archive");
+
+				PendingIntent pi = PendingIntent.getActivity(mContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+
+				// Update notification
+				builder.setContentText(mContext.getString(R.string.title_update_install));
+				builder.setWhen(System.currentTimeMillis());
+				builder.setAutoCancel(true);
+				builder.setOngoing(false);
+				builder.setContentIntent(pi);
+				notification = builder.build();
+				notificationManager.notify(Util.NOTIFY_UPDATE, notification);
+			}
+
+		}
+	}
+
 	// Helper methods
 
 	private void blueStreakOfProgress(Integer current, Integer max) {
@@ -1790,6 +2002,7 @@ public class ActivityShare extends ActivityBase {
 		View vShareProgressFull = (View) findViewById(R.id.vShareProgressFull);
 		vShareProgressFull.getLayoutParams().width = width;
 		vShareProgressFull.invalidate();
+		vShareProgressFull.requestLayout();
 	}
 
 	private void done(Throwable ex) {
@@ -1805,22 +2018,19 @@ public class ActivityShare extends ActivityBase {
 		blueStreakOfProgress(0, 1);
 		mRunning = false;
 
-		// Change ok button to "Close"
+		// Update buttons
+		final Button btnCancel = (Button) findViewById(R.id.btnCancel);
 		final Button btnOk = (Button) findViewById(R.id.btnOk);
-		btnOk.setText(getString(R.string.menu_close));
+		btnCancel.setEnabled(false);
 		btnOk.setEnabled(true);
+
+		// Handle close
 		btnOk.setOnClickListener(new Button.OnClickListener() {
 			@Override
 			public void onClick(View v) {
 				finish();
 			}
 		});
-
-		// Remove cancel button and separator
-		final Button btnCancel = (Button) findViewById(R.id.btnCancel);
-		final View vButtonSeparator = findViewById(R.id.vButtonSeparator);
-		btnCancel.setVisibility(View.GONE);
-		vButtonSeparator.setVisibility(View.GONE);
 	}
 
 	public void fileChooser() {
@@ -1838,9 +2048,9 @@ public class ActivityShare extends ActivityBase {
 		btnOk.setEnabled(true);
 	}
 
-	public static String getBaseURL(Context context) {
+	public static String getBaseURL() {
 		int userId = Util.getUserId(Process.myUid());
-		if (PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingHttps, true, true))
+		if (PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingHttps, true))
 			return HTTPS_BASE_URL;
 		else
 			return HTTP_BASE_URL;
@@ -1908,6 +2118,7 @@ public class ActivityShare extends ActivityBase {
 			// 'errno' => 204, 'error' => 'Too many packages for application'
 			// 'errno' => 205, 'error' => 'Error storing restrictions'
 			// 'errno' => 206, 'error' => 'Device not activated'
+			// 'errno' => 207, 'error' => 'Unknown category'
 
 			// fetch:
 			// 'errno' => 301, 'error' => 'Not authorized'

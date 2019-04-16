@@ -10,7 +10,7 @@ public class XInetAddress extends XHook {
 	private Methods mMethod;
 
 	private XInetAddress(Methods method, String restrictionName, String specifier) {
-		super(restrictionName, method.name(), null);
+		super(restrictionName, method.name(), "InetAddress." + method.name());
 		mMethod = method;
 	}
 
@@ -19,14 +19,17 @@ public class XInetAddress extends XHook {
 	}
 
 	// public static InetAddress[] getAllByName(String host)
+	// public static InetAddress[] getAllByNameOnNet(String host, int netId)
 	// public static InetAddress getByAddress(byte[] ipAddress)
 	// public static InetAddress getByAddress(String hostName, byte[] ipAddress)
 	// public static InetAddress getByName(String host)
+	// public static InetAddress getByNameOnNet(String host, int netId)
 	// libcore/luni/src/main/java/java/net/InetAddress.java
 	// http://developer.android.com/reference/java/net/InetAddress.html
+	// http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.0.0_r1/android/net/Network.java
 
 	private enum Methods {
-		getAllByName, getByAddress, getByName
+		getAllByName, getAllByNameOnNet, getByAddress, getByName, getByNameOnNet
 	};
 
 	public static List<XHook> getInstances() {
@@ -47,14 +50,14 @@ public class XInetAddress extends XHook {
 		if (result != null) {
 			// Get addresses
 			InetAddress[] addresses;
-			if (result.getClass().equals(InetAddress.class))
+			if (result instanceof InetAddress)
 				addresses = new InetAddress[] { (InetAddress) result };
-			else if (result.getClass().equals(InetAddress[].class))
+			else if (result instanceof InetAddress[])
 				addresses = (InetAddress[]) result;
 			else
 				addresses = new InetAddress[0];
 
-			// Check to restrict
+			// Check if restricted
 			boolean restrict = false;
 			for (InetAddress address : addresses)
 				if (!address.isLoopbackAddress()) {
@@ -63,8 +66,15 @@ public class XInetAddress extends XHook {
 				}
 
 			// Restrict
-			if (restrict && isRestricted(param))
-				param.setThrowable(new UnknownHostException("XPrivacy"));
+			if (restrict)
+				if (param.args.length > 0 && param.args[0] instanceof String) {
+					if (isRestrictedExtra(param, (String) param.args[0]))
+						param.setThrowable(new UnknownHostException("XPrivacy"));
+
+				} else {
+					if (isRestricted(param))
+						param.setThrowable(new UnknownHostException("XPrivacy"));
+				}
 		}
 	}
 }

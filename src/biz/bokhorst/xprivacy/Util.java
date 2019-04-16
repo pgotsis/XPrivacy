@@ -9,9 +9,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.StackOverflowError;
 import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Method;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.RuntimeException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.nio.channels.FileChannel;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
@@ -19,8 +23,13 @@ import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.ArrayList;
+import java.util.List;
+
+import javax.net.ssl.SSLPeerUnverifiedException;
+
+import org.apache.http.conn.ConnectTimeoutException;
+import org.apache.http.conn.HttpHostConnectException;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -29,23 +38,30 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.TransactionTooLargeException;
+import android.os.UserHandle;
 import android.util.Base64;
+import android.util.DisplayMetrics;
 import android.util.Log;
+import android.util.TypedValue;
+import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Toast;
 
+@SuppressWarnings("deprecation")
 public class Util {
 	private static boolean mPro = false;
 	private static boolean mLog = true;
 	private static boolean mLogDetermined = false;
-	private static boolean mHasLBE = false;
-	private static boolean mHasLBEDetermined = false;
+	private static Boolean mHasLBE = null;
 
-	private static Version MIN_PRO_VERSION = new Version("1.12");
+	private static Version MIN_PRO_VERSION = new Version("1.20");
 	private static String LICENSE_FILE_NAME = "XPrivacy_license.txt";
 
 	public static int NOTIFY_RESTART = 0;
@@ -54,6 +70,8 @@ public class Util {
 	public static int NOTIFY_MIGRATE = 3;
 	public static int NOTIFY_RANDOMIZE = 4;
 	public static int NOTIFY_UPGRADE = 5;
+	public static int NOTIFY_UPDATE = 6;
+	public static int NOTIFY_CORRUPT = 7;
 
 	public static void log(XHook hook, int priority, String msg) {
 		// Check if logging enabled
@@ -61,7 +79,7 @@ public class Util {
 		if (!mLogDetermined && uid > 0) {
 			mLogDetermined = true;
 			try {
-				mLog = PrivacyManager.getSettingBool(0, PrivacyManager.cSettingLog, false, false);
+				mLog = PrivacyManager.getSettingBool(0, PrivacyManager.cSettingLog, false);
 			} catch (Throwable ignored) {
 				mLog = false;
 			}
@@ -88,18 +106,44 @@ public class Util {
 	}
 
 	public static void bug(XHook hook, Throwable ex) {
+		if (ex instanceof InvocationTargetException) {
+			InvocationTargetException exex = (InvocationTargetException) ex;
+			if (exex.getTargetException() != null)
+				ex = exex.getTargetException();
+		}
+
 		int priority;
-		if (ex instanceof RuntimeException)
-			priority = Log.WARN;
-		else if (ex instanceof OutOfMemoryError)
-			priority = Log.WARN;
-		else if (ex instanceof ActivityShare.AbortException)
+		if (ex instanceof ActivityShare.AbortException)
 			priority = Log.WARN;
 		else if (ex instanceof ActivityShare.ServerException)
 			priority = Log.WARN;
+		else if (ex instanceof ConnectTimeoutException)
+			priority = Log.WARN;
+		else if (ex instanceof FileNotFoundException)
+			priority = Log.WARN;
+		else if (ex instanceof HttpHostConnectException)
+			priority = Log.WARN;
+		else if (ex instanceof NameNotFoundException)
+			priority = Log.WARN;
 		else if (ex instanceof NoClassDefFoundError)
 			priority = Log.WARN;
+		else if (ex instanceof OutOfMemoryError)
+			priority = Log.WARN;
+		else if (ex instanceof RuntimeException)
+			priority = Log.WARN;
 		else if (ex instanceof SecurityException)
+			priority = Log.WARN;
+		else if (ex instanceof SocketTimeoutException)
+			priority = Log.WARN;
+		else if (ex instanceof SSLPeerUnverifiedException)
+			priority = Log.WARN;
+		else if (ex instanceof StackOverflowError)
+			priority = Log.WARN;
+		else if (ex instanceof TransactionTooLargeException)
+			priority = Log.WARN;
+		else if (ex instanceof UnknownHostException)
+			priority = Log.WARN;
+		else if (ex instanceof UnsatisfiedLinkError)
 			priority = Log.WARN;
 		else
 			priority = Log.ERROR;
@@ -117,30 +161,25 @@ public class Util {
 	}
 
 	public static void logStack(XHook hook, int priority) {
-		log(hook, priority, Log.getStackTraceString(new Exception("StackTrace")));
+		logStack(hook, priority, false);
 	}
 
-	public static int getXposedAppProcessVersion() {
-		final Pattern PATTERN_APP_PROCESS_VERSION = Pattern.compile(".*with Xposed support \\(version (.+)\\).*");
-		try {
-			InputStream is = new FileInputStream("/system/bin/app_process");
-			BufferedReader br = new BufferedReader(new InputStreamReader(is));
-			String line;
-			while ((line = br.readLine()) != null) {
-				if (!line.contains("Xposed"))
-					continue;
-				Matcher m = PATTERN_APP_PROCESS_VERSION.matcher(line);
-				if (m.find()) {
-					br.close();
-					is.close();
-					return Integer.parseInt(m.group(1));
+	public static void logStack(XHook hook, int priority, boolean cl) {
+		StringBuilder trace = new StringBuilder();
+		ClassLoader loader = Thread.currentThread().getContextClassLoader();
+		for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+			trace.append(ste.toString());
+			if (cl)
+				try {
+					Class<?> clazz = Class.forName(ste.getClassName(), false, loader);
+					trace.append(" [");
+					trace.append(clazz.getClassLoader().toString());
+					trace.append("]");
+				} catch (ClassNotFoundException ignored) {
 				}
-			}
-			br.close();
-			is.close();
-		} catch (Throwable ex) {
+			trace.append("\n");
 		}
-		return -1;
+		log(hook, priority, trace.toString());
 	}
 
 	public static boolean isXposedEnabled() {
@@ -196,8 +235,7 @@ public class Util {
 		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1)
 			try {
 				// UserHandle: public static final int getAppId(int uid)
-				Class<?> clazz = Class.forName("android.os.UserHandle");
-				Method method = (Method) clazz.getDeclaredMethod("getAppId", int.class);
+				Method method = (Method) UserHandle.class.getDeclaredMethod("getAppId", int.class);
 				uid = (Integer) method.invoke(null, uid);
 			} catch (Throwable ex) {
 				Util.log(null, Log.WARN, ex.toString());
@@ -212,8 +250,7 @@ public class Util {
 			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1)
 				try {
 					// UserHandle: public static final int getUserId(int uid)
-					Class<?> clazz = Class.forName("android.os.UserHandle");
-					Method method = (Method) clazz.getDeclaredMethod("getUserId", int.class);
+					Method method = (Method) UserHandle.class.getDeclaredMethod("getUserId", int.class);
 					userId = (Integer) method.invoke(null, uid);
 				} catch (Throwable ex) {
 					Util.log(null, Log.WARN, ex.toString());
@@ -241,8 +278,13 @@ public class Util {
 		File licenseFile = new File(storageDir + File.separator + LICENSE_FILE_NAME);
 		if (!licenseFile.exists())
 			licenseFile = new File(storageDir + File.separator + ".xprivacy" + File.separator + LICENSE_FILE_NAME);
+		if (!licenseFile.exists())
+			licenseFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+					+ File.separator + LICENSE_FILE_NAME);
 
 		String importedLicense = importProLicense(licenseFile);
+		if (importedLicense == null)
+			return null;
 
 		// Check license file
 		licenseFile = new File(importedLicense);
@@ -255,8 +297,20 @@ public class Util {
 				String signature = iniFile.get("signature", "");
 				if (name == null || email == null || signature == null)
 					return null;
-				else
+				else {
+					// Check expiry
+					if (email.endsWith("@faircode.eu")) {
+						long expiry = Long.parseLong(email.split("\\.")[0]);
+						long time = System.currentTimeMillis() / 1000L;
+						if (time > expiry) {
+							Util.log(null, Log.WARN, "Licensing: expired");
+							return null;
+						}
+					}
+
+					// Valid
 					return new String[] { name, email, signature };
+				}
 			} catch (FileNotFoundException ex) {
 				return null;
 			} catch (Throwable ex) {
@@ -271,32 +325,45 @@ public class Util {
 	public static String importProLicense(File licenseFile) {
 		// Get imported license file name
 		String importedLicense = getUserDataDirectory(Process.myUid()) + File.separator + LICENSE_FILE_NAME;
+		File out = new File(importedLicense);
 
-		// Import license file
+		// Check if license file exists
 		if (licenseFile.exists() && licenseFile.canRead()) {
 			try {
-				File out = new File(importedLicense);
+				// Import license file
 				Util.log(null, Log.WARN, "Licensing: importing " + out.getAbsolutePath());
-				InputStream is = new FileInputStream(licenseFile.getAbsolutePath());
-				OutputStream os = new FileOutputStream(out.getAbsolutePath());
-				byte[] buffer = new byte[1024];
-				int read;
-				while ((read = is.read(buffer)) != -1)
-					os.write(buffer, 0, read);
-				is.close();
-				os.flush();
-				os.close();
+				InputStream is = null;
+				is = new FileInputStream(licenseFile.getAbsolutePath());
+				try {
+					OutputStream os = null;
+					try {
+						os = new FileOutputStream(out.getAbsolutePath());
+						byte[] buffer = new byte[1024];
+						int read;
+						while ((read = is.read(buffer)) != -1)
+							os.write(buffer, 0, read);
+						os.flush();
+					} finally {
+						if (os != null)
+							os.close();
+					}
+				} finally {
+					if (is != null)
+						is.close();
+				}
 
-				// Protect license file
+				// Protect imported license file
 				setPermissions(out.getAbsolutePath(), 0700, Process.myUid(), Process.myUid());
 
+				// Remove original license file
 				licenseFile.delete();
 			} catch (FileNotFoundException ignored) {
 			} catch (Throwable ex) {
 				Util.bug(null, ex);
 			}
 		}
-		return importedLicense;
+
+		return (out.exists() && out.canRead() ? importedLicense : null);
 	}
 
 	public static Version getProEnablerVersion(Context context) {
@@ -353,20 +420,54 @@ public class Util {
 	}
 
 	public static boolean hasLBE() {
-		if (!mHasLBEDetermined) {
-			mHasLBEDetermined = true;
+		if (mHasLBE == null) {
+			mHasLBE = false;
 			try {
 				File apps = new File(Environment.getDataDirectory() + File.separator + "app");
 				File[] files = (apps == null ? null : apps.listFiles());
 				if (files != null)
 					for (File file : files)
-						if (file.getName().startsWith("com.lbe.security"))
+						if (file.getName().startsWith("com.lbe.security")) {
 							mHasLBE = true;
+							break;
+						}
 			} catch (Throwable ex) {
 				Util.bug(null, ex);
 			}
 		}
 		return mHasLBE;
+	}
+
+	public static boolean isSELinuxEnforced() {
+		try {
+			Class<?> cSELinux = Class.forName("android.os.SELinux");
+			if ((Boolean) cSELinux.getDeclaredMethod("isSELinuxEnabled").invoke(null))
+				if ((Boolean) cSELinux.getDeclaredMethod("isSELinuxEnforced").invoke(null))
+					return true;
+		} catch (Throwable t) {
+		}
+		return false;
+	}
+
+	public static String getXOption(String name) {
+		try {
+			Class<?> cSystemProperties = Class.forName("android.os.SystemProperties");
+			Method spGet = cSystemProperties.getDeclaredMethod("get", String.class);
+			String options = (String) spGet.invoke(null, "xprivacy.options");
+			Log.w("XPrivacy", "Options=" + options);
+			if (options != null)
+				for (String option : options.split(",")) {
+					String[] nv = option.split("=");
+					if (nv[0].equals(name))
+						if (nv.length > 1)
+							return nv[1];
+						else
+							return "true";
+				}
+		} catch (Throwable ex) {
+			Log.e("XPrivacy", ex.toString() + "\n" + Log.getStackTraceString(ex));
+		}
+		return null;
 	}
 
 	public static int getSelfVersionCode(Context context) {
@@ -434,7 +535,7 @@ public class Util {
 	public static String sha1(String text) throws NoSuchAlgorithmException, UnsupportedEncodingException {
 		// SHA1
 		int userId = Util.getUserId(Process.myUid());
-		String salt = PrivacyManager.getSetting(userId, PrivacyManager.cSettingSalt, "", true);
+		String salt = PrivacyManager.getSalt(userId);
 		MessageDigest digest = MessageDigest.getInstance("SHA-1");
 		byte[] bytes = (text + salt).getBytes("UTF-8");
 		digest.update(bytes, 0, bytes.length);
@@ -448,7 +549,7 @@ public class Util {
 	public static String md5(String text) throws NoSuchAlgorithmException, UnsupportedEncodingException {
 		// MD5
 		int userId = Util.getUserId(Process.myUid());
-		String salt = PrivacyManager.getSetting(userId, PrivacyManager.cSettingSalt, "", true);
+		String salt = PrivacyManager.getSalt(userId);
 		byte[] bytes = MessageDigest.getInstance("MD5").digest((text + salt).getBytes("UTF-8"));
 		StringBuilder sb = new StringBuilder();
 		for (byte b : bytes)
@@ -528,5 +629,51 @@ public class Util {
 			return false;
 		}
 		return src.delete();
+	}
+
+	public static List<View> getViewsByTag(ViewGroup root, String tag) {
+		List<View> views = new ArrayList<View>();
+		for (int i = 0; i < root.getChildCount(); i++) {
+			View child = root.getChildAt(i);
+
+			if (child instanceof ViewGroup)
+				views.addAll(getViewsByTag((ViewGroup) child, tag));
+
+			if (tag.equals(child.getTag()))
+				views.add(child);
+		}
+		return views;
+	}
+
+	public static float dipToPixels(Context context, float dipValue) {
+		DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+		return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dipValue, metrics);
+	}
+
+	public static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+		final int height = options.outHeight;
+		final int width = options.outWidth;
+		int inSampleSize = 1;
+
+		if (height > reqHeight || width > reqWidth) {
+			final int halfHeight = height / 2;
+			final int halfWidth = width / 2;
+			while ((halfHeight / inSampleSize) > reqHeight && (halfWidth / inSampleSize) > reqWidth)
+				inSampleSize *= 2;
+		}
+
+		return inSampleSize;
+	}
+
+	public static String getSEContext() {
+		try {
+			Class<?> cSELinux = Class.forName("android.os.SELinux");
+			Method mGetContext = cSELinux.getDeclaredMethod("getContext");
+			return (String) mGetContext.invoke(null);
+		} catch (Throwable ex) {
+			Util.bug(null, ex);
+			return null;
+		}
+
 	}
 }

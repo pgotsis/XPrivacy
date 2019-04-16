@@ -18,12 +18,13 @@ public class XApplication extends XHook {
 
 	public static String cAction = "Action";
 	public static String cActionKillProcess = "Kill";
+	public static String cActionFlush = "Flush";
 
 	public static String ACTION_MANAGE_PACKAGE = "biz.bokhorst.xprivacy.ACTION_MANAGE_PACKAGE";
 	public static String PERMISSION_MANAGE_PACKAGES = "biz.bokhorst.xprivacy.MANAGE_PACKAGES";
 
-	public XApplication(Methods method, String restrictionName, String actionName, int sdk) {
-		super(restrictionName, method.name(), actionName, sdk);
+	public XApplication(Methods method, String restrictionName, String actionName) {
+		super(restrictionName, method.name(), actionName);
 		mMethod = method;
 	}
 
@@ -42,7 +43,7 @@ public class XApplication extends XHook {
 
 	public static List<XHook> getInstances() {
 		List<XHook> listHook = new ArrayList<XHook>();
-		listHook.add(new XApplication(Methods.onCreate, null, null, 1));
+		listHook.add(new XApplication(Methods.onCreate, null, null));
 		return listHook;
 	}
 
@@ -53,7 +54,8 @@ public class XApplication extends XHook {
 
 	@Override
 	protected void after(XParam param) throws Throwable {
-		if (mMethod == Methods.onCreate) {
+		switch (mMethod) {
+		case onCreate:
 			// Install receiver for package management
 			if (PrivacyManager.isApplication(Process.myUid()) && !mReceiverInstalled)
 				try {
@@ -68,8 +70,8 @@ public class XApplication extends XHook {
 				} catch (Throwable ex) {
 					Util.bug(this, ex);
 				}
-		} else
-			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());
+			break;
+		}
 	}
 
 	public static void manage(Context context, int uid, String action) {
@@ -86,10 +88,12 @@ public class XApplication extends XHook {
 
 	public static void manage(Context context, String packageName, String action) {
 		Util.log(null, Log.INFO, "Manage package=" + packageName + " action=" + action);
+
 		if (packageName == null && XApplication.cActionKillProcess.equals(action)) {
 			Util.log(null, Log.WARN, "Kill all");
 			return;
 		}
+
 		Intent manageIntent = new Intent(XApplication.ACTION_MANAGE_PACKAGE);
 		manageIntent.putExtra(XApplication.cAction, action);
 		if (packageName != null)
@@ -105,10 +109,13 @@ public class XApplication extends XHook {
 		public void onReceive(Context context, Intent intent) {
 			try {
 				String action = intent.getExtras().getString(cAction);
-				Util.log(null, Log.INFO, "Managing uid=" + Process.myUid() + " action=" + action);
+				Util.log(null, Log.WARN, "Managing uid=" + Process.myUid() + " action=" + action);
+
 				if (cActionKillProcess.equals(action))
 					android.os.Process.killProcess(Process.myPid());
-				else
+				else if (cActionFlush.equals(action)) {
+					PrivacyManager.flush();
+				} else
 					Util.log(null, Log.WARN, "Unknown management action=" + action);
 			} catch (Throwable ex) {
 				Util.bug(null, ex);

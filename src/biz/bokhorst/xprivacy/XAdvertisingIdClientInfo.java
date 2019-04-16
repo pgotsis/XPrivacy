@@ -31,23 +31,24 @@ public class XAdvertisingIdClientInfo extends XHook {
 
 	public static List<XHook> getInstances() {
 		List<XHook> listHook = new ArrayList<XHook>();
-		listHook.add(new XAdvertisingIdClientInfo(Methods.getId, PrivacyManager.cIdentification, "AdvertisingId")
-				.optional());
+		listHook.add(new XAdvertisingIdClientInfo(Methods.getId, PrivacyManager.cIdentification, "AdvertisingId"));
 		return listHook;
 	}
 
 	@Override
 	protected void before(XParam param) throws Throwable {
-		if (mMethod == Methods.getId) {
-			if (isRestricted(param))
-				param.setResult(PrivacyManager.getDefacedProp(Binder.getCallingUid(), "AdvertisingId"));
-
-		} else
-			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());
+		// Do nothing
 	}
 
 	@Override
 	protected void after(XParam param) throws Throwable {
-		// Do nothing
+		if (mMethod == Methods.getId) {
+			String adid = (String) param.getResult();
+			if (adid != null)
+				if (isRestrictedValue(param, adid))
+					param.setResult(PrivacyManager.getDefacedProp(Binder.getCallingUid(), "AdvertisingId"));
+
+		} else
+			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());
 	}
 }

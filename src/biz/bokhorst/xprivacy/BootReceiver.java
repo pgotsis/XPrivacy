@@ -18,13 +18,38 @@ public class BootReceiver extends BroadcastReceiver {
 		changeIntent.putExtra(UpdateService.cAction, UpdateService.cActionBoot);
 		context.startService(changeIntent);
 
+		NotificationManager notificationManager = (NotificationManager) context
+				.getSystemService(Context.NOTIFICATION_SERVICE);
+
 		// Check if Xposed enabled
-		if (Util.isXposedEnabled())
-			context.sendBroadcast(new Intent("biz.bokhorst.xprivacy.action.ACTIVE"));
+		if (Util.isXposedEnabled() && PrivacyService.checkClient())
+			try {
+				if (PrivacyService.getClient().databaseCorrupt()) {
+					// Build notification
+					NotificationCompat.Builder notificationBuilder = new NotificationCompat.Builder(context);
+					notificationBuilder.setSmallIcon(R.drawable.ic_launcher);
+					notificationBuilder.setContentTitle(context.getString(R.string.app_name));
+					notificationBuilder.setContentText(context.getString(R.string.msg_corrupt));
+					notificationBuilder.setWhen(System.currentTimeMillis());
+					notificationBuilder.setAutoCancel(true);
+					Notification notification = notificationBuilder.build();
+
+					// Display notification
+					notificationManager.notify(Util.NOTIFY_CORRUPT, notification);
+				} else
+					context.sendBroadcast(new Intent("biz.bokhorst.xprivacy.action.ACTIVE"));
+			} catch (Throwable ex) {
+				Util.bug(null, ex);
+			}
 		else {
 			// Create Xposed installer intent
-			Intent xInstallerIntent = context.getPackageManager().getLaunchIntentForPackage(
-					"de.robv.android.xposed.installer");
+			// @formatter:off
+			Intent xInstallerIntent = new Intent("de.robv.android.xposed.installer.OPEN_SECTION")
+				.setPackage("de.robv.android.xposed.installer")
+				.putExtra("section", "modules")
+				.putExtra("module", context.getPackageName())
+				.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+			// @formatter:on
 
 			PendingIntent pi = (xInstallerIntent == null ? null : PendingIntent.getActivity(context, 0,
 					xInstallerIntent, PendingIntent.FLAG_UPDATE_CURRENT));
@@ -41,8 +66,6 @@ public class BootReceiver extends BroadcastReceiver {
 			Notification notification = notificationBuilder.build();
 
 			// Display notification
-			NotificationManager notificationManager = (NotificationManager) context
-					.getSystemService(Context.NOTIFICATION_SERVICE);
 			notificationManager.notify(Util.NOTIFY_NOTXPOSED, notification);
 		}
 	}

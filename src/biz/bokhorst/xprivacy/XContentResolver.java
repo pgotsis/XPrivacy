@@ -1,8 +1,11 @@
 package biz.bokhorst.xprivacy;
 
+import java.io.FileNotFoundException;
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 import android.annotation.SuppressLint;
 import android.content.SyncAdapterType;
@@ -11,25 +14,37 @@ import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
 import android.os.Binder;
-import android.os.DeadObjectException;
+import android.os.Bundle;
+import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
 
 public class XContentResolver extends XHook {
 	private Methods mMethod;
+	private boolean mClient;
+	private String mClassName;
 
-	private XContentResolver(Methods method, String restrictionName) {
-		super(restrictionName, method.name(), null);
+	private XContentResolver(Methods method, String restrictionName, String className) {
+		super(restrictionName, method.name().replace("Srv_", ""), method.name());
 		mMethod = method;
+		if (className == null)
+			mClassName = "com.android.server.content.ContentService";
+		else
+			mClassName = className;
 	}
 
-	private XContentResolver(Methods method, String restrictionName, int sdk) {
-		super(restrictionName, "query", null, sdk);
+	private XContentResolver(Methods method, String restrictionName, boolean client) {
+		super(restrictionName, method.name(), null);
 		mMethod = method;
+		mClient = client;
+		mClassName = null;
 	}
 
 	public String getClassName() {
-		return (mMethod == Methods.cquery ? "android.content.ContentProviderClient" : "android.content.ContentResolver");
+		if (mClassName == null)
+			return (mClient ? "android.content.ContentProviderClient" : "android.content.ContentResolver");
+		else
+			return mClassName;
 	}
 
 	// @formatter:off
@@ -38,10 +53,23 @@ public class XContentResolver extends XHook {
 	// static List<SyncInfo> getCurrentSyncs()
 	// static SyncAdapterType[] getSyncAdapterTypes()
 
+	// final AssetFileDescriptor openAssetFileDescriptor(Uri uri, String mode)
+	// final AssetFileDescriptor openAssetFileDescriptor(Uri uri, String mode, CancellationSignal cancellationSignal)
+	// final ParcelFileDescriptor openFileDescriptor(Uri uri, String mode, CancellationSignal cancellationSignal)
+	// final ParcelFileDescriptor openFileDescriptor(Uri uri, String mode)
+	// final InputStream openInputStream(Uri uri)
+	// final OutputStream openOutputStream(Uri uri)
+	// final OutputStream openOutputStream(Uri uri, String mode)
+	// final AssetFileDescriptor openTypedAssetFileDescriptor(Uri uri, String mimeType, Bundle opts, CancellationSignal cancellationSignal)
+	// final AssetFileDescriptor openTypedAssetFileDescriptor(Uri uri, String mimeType, Bundle opts)
+
+	// AssetFileDescriptor openAssetFile(Uri url, String mode, CancellationSignal signal)
+	// AssetFileDescriptor openAssetFile(Uri url, String mode)
+	// ParcelFileDescriptor openFile(Uri url, String mode)
+	// ParcelFileDescriptor openFile(Uri url, String mode, CancellationSignal signal)
+
 	// public Cursor query(Uri url, String[] projection, String selection, String[] selectionArgs, String sortOrder)
 	// public Cursor query(Uri url, String[] projection, String selection, String[] selectionArgs, String sortOrder, CancellationSignal cancellationSignal)
-
-	// TODO: public final void registerContentObserver(Uri uri, boolean notifyForDescendents, ContentObserver observer)
 
 	// https://developers.google.com/gmail/android/
 	// http://developer.android.com/reference/android/content/ContentResolver.html
@@ -56,57 +84,218 @@ public class XContentResolver extends XHook {
 
 	// frameworks/base/core/java/android/content/ContentResolver.java
 
+	// public List<SyncInfo> getCurrentSyncs()
+	// public void registerContentObserver(android.net.Uri uri, boolean notifyForDescendants, android.database.IContentObserver observer, int userHandle)
+	// public void unregisterContentObserver(android.database.IContentObserver observer)
+	// http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/4.2.2_r1/android/content/ContentService.java
+	// public List<android.content.SyncInfo> getCurrentSyncsAsUser(int userId)
+	// http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.0.0_r1/android/content/IContentService.java
+
+	// public Bundle call(String method, String request, Bundle args)
+	// http://developer.android.com/reference/android/provider/Settings.html
+	// http://developer.android.com/reference/android/provider/Settings.Global.html
+	// http://developer.android.com/reference/android/provider/Settings.Secure.html
+	// http://developer.android.com/reference/android/provider/Settings.System.html
+	// http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/4.4.2_r1/com/android/providers/settings/SettingsProvider.java
+
 	// @formatter:on
 
+	// @formatter:off
 	private enum Methods {
-		getCurrentSync, getCurrentSyncs, getSyncAdapterTypes, query, cquery
+		getCurrentSync, getCurrentSyncs, getSyncAdapterTypes,
+		openAssetFile, openFile, openAssetFileDescriptor, openFileDescriptor, openInputStream, openOutputStream, openTypedAssetFileDescriptor,
+		query, Srv_call, Srv_query,
+		Srv_getCurrentSyncs, Srv_getCurrentSyncsAsUser
 	};
+	// @formatter:on
 
-	public static List<XHook> getInstances() {
+	// @formatter:off
+	public static List<String> cProviderClassName = Arrays.asList(new String[] {
+		"com.android.providers.downloads.DownloadProvider",
+		"com.android.providers.calendar.CalendarProvider2",
+		"com.android.providers.contacts.CallLogProvider",
+		"com.android.providers.contacts.ContactsProvider2",
+		"com.google.android.gm.provider.PublicContentProvider",
+		"com.google.android.gsf.gservices.GservicesProvider",
+		"com.android.providers.telephony.MmsProvider",
+		"com.android.providers.telephony.MmsSmsProvider",
+		"com.android.providers.telephony.SmsProvider",
+		"com.android.providers.telephony.TelephonyProvider",
+		"com.android.providers.userdictionary.UserDictionaryProvider",
+		"com.android.providers.settings.SettingsProvider",
+	});
+	// @formatter:on
+
+	public static List<XHook> getPackageInstances(String packageName, ClassLoader loader) {
+		if (packageName.startsWith("com.android.browser.provider"))
+			try {
+				Class.forName("com.android.browser.provider.BrowserProviderProxy", false, loader);
+				return getInstances("com.android.browser.provider.BrowserProviderProxy");
+			} catch (ClassNotFoundException ignored) {
+				try {
+					Class.forName("com.android.browser.provider.BrowserProvider2", false, loader);
+					return getInstances("com.android.browser.provider.BrowserProvider2");
+				} catch (ClassNotFoundException ignored2) {
+					Util.log(null, Log.ERROR, "Browser provider not found, package=" + packageName);
+					return new ArrayList<XHook>();
+				}
+			}
+
+		else if (packageName.startsWith("com.android.email.provider"))
+			try {
+				Class.forName("com.android.email.provider.EmailProvider", false, loader);
+				return getInstances("com.android.email.provider.EmailProvider");
+			} catch (ClassNotFoundException ignored) {
+				Util.log(null, Log.WARN, "E-mail provider not found, package=" + packageName);
+				return new ArrayList<XHook>();
+			}
+
+		else if (packageName.startsWith("com.google.android.gm.provider"))
+			try {
+				Class.forName("com.google.android.gm.provider.PublicContentProvider", false, loader);
+				return getInstances("com.google.android.gm.provider.PublicContentProvider");
+			} catch (ClassNotFoundException ignored) {
+				Util.log(null, Log.WARN, "G-mail provider not found, package=" + packageName);
+				return new ArrayList<XHook>();
+			}
+
+		else {
+			List<XHook> listHook = new ArrayList<XHook>();
+			for (String className : cProviderClassName)
+				if (className.startsWith(packageName))
+					listHook.addAll(getInstances(className));
+			return listHook;
+		}
+	}
+
+	private static List<XHook> getInstances(String className) {
 		List<XHook> listHook = new ArrayList<XHook>();
-		listHook.add(new XContentResolver(Methods.getCurrentSync, PrivacyManager.cAccounts));
-		listHook.add(new XContentResolver(Methods.getCurrentSyncs, PrivacyManager.cAccounts));
-		listHook.add(new XContentResolver(Methods.getSyncAdapterTypes, PrivacyManager.cAccounts));
-		listHook.add(new XContentResolver(Methods.query, null, 1));
-		listHook.add(new XContentResolver(Methods.cquery, null, 1));
+
+		if ("com.android.providers.settings.SettingsProvider".equals(className))
+			listHook.add(new XContentResolver(Methods.Srv_call, null, className));
+		else
+			listHook.add(new XContentResolver(Methods.Srv_query, null, className));
+
+		return listHook;
+	}
+
+	public static List<XHook> getInstances(boolean server) {
+		List<XHook> listHook = new ArrayList<XHook>();
+
+		if (server) {
+			listHook.add(new XContentResolver(Methods.Srv_query, null, "com.android.internal.telephony.IccProvider"));
+
+			listHook.add(new XContentResolver(Methods.Srv_getCurrentSyncs, PrivacyManager.cAccounts, null));
+			listHook.add(new XContentResolver(Methods.Srv_getCurrentSyncsAsUser, PrivacyManager.cAccounts, null));
+		} else {
+			listHook.add(new XContentResolver(Methods.getCurrentSync, PrivacyManager.cAccounts, false));
+			listHook.add(new XContentResolver(Methods.getCurrentSyncs, PrivacyManager.cAccounts, false));
+			listHook.add(new XContentResolver(Methods.getSyncAdapterTypes, PrivacyManager.cAccounts, false));
+
+			listHook.add(new XContentResolver(Methods.openAssetFileDescriptor, PrivacyManager.cStorage, false));
+			listHook.add(new XContentResolver(Methods.openFileDescriptor, PrivacyManager.cStorage, false));
+			listHook.add(new XContentResolver(Methods.openInputStream, PrivacyManager.cStorage, false));
+			listHook.add(new XContentResolver(Methods.openOutputStream, PrivacyManager.cStorage, false));
+			listHook.add(new XContentResolver(Methods.openTypedAssetFileDescriptor, PrivacyManager.cStorage, false));
+
+			listHook.add(new XContentResolver(Methods.openAssetFile, PrivacyManager.cStorage, true));
+			listHook.add(new XContentResolver(Methods.openFile, PrivacyManager.cStorage, true));
+			listHook.add(new XContentResolver(Methods.openTypedAssetFileDescriptor, PrivacyManager.cStorage, true));
+
+			listHook.add(new XContentResolver(Methods.query, null, false));
+			listHook.add(new XContentResolver(Methods.query, null, true));
+		}
+
 		return listHook;
 	}
 
 	@Override
 	protected void before(XParam param) throws Throwable {
-		if (mMethod == Methods.query || mMethod == Methods.cquery)
-			try {
-				handleUriBefore(param);
-			} catch (DeadObjectException ignored) {
-			} catch (Throwable ex) {
-				Util.bug(this, ex);
-			}
+		switch (mMethod) {
+		case getCurrentSync:
+		case getCurrentSyncs:
+		case getSyncAdapterTypes:
+		case openAssetFile:
+		case openFile:
+		case openAssetFileDescriptor:
+		case openFileDescriptor:
+		case openInputStream:
+		case openOutputStream:
+		case openTypedAssetFileDescriptor:
+			// Do nothing
+			break;
+
+		case Srv_call:
+			break;
+
+		case query:
+		case Srv_query:
+			handleUriBefore(param);
+			break;
+
+		case Srv_getCurrentSyncs:
+		case Srv_getCurrentSyncsAsUser:
+			// Do nothing
+			break;
+		}
 	}
 
 	@Override
 	protected void after(XParam param) throws Throwable {
-		if (mMethod == Methods.getCurrentSync) {
+		switch (mMethod) {
+		case getCurrentSync:
 			if (isRestricted(param))
 				param.setResult(null);
+			break;
 
-		} else if (mMethod == Methods.getCurrentSyncs) {
+		case getCurrentSyncs:
 			if (isRestricted(param))
 				param.setResult(new ArrayList<SyncInfo>());
+			break;
 
-		} else if (mMethod == Methods.getSyncAdapterTypes) {
+		case getSyncAdapterTypes:
 			if (isRestricted(param))
 				param.setResult(new SyncAdapterType[0]);
+			break;
 
-		} else if (mMethod == Methods.query || mMethod == Methods.cquery) {
-			try {
-				handleUriAfter(param);
-			} catch (DeadObjectException ignored) {
-			} catch (Throwable ex) {
-				Util.bug(this, ex);
+		case openAssetFileDescriptor:
+		case openFileDescriptor:
+		case openInputStream:
+		case openOutputStream:
+		case openTypedAssetFileDescriptor:
+		case openAssetFile:
+		case openFile:
+			if (param.args.length > 0 && param.args[0] instanceof Uri) {
+				String uri = ((Uri) param.args[0]).toString();
+				if (isRestrictedExtra(param, uri))
+					param.setThrowable(new FileNotFoundException("XPrivacy"));
 			}
+			break;
 
-		} else
-			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());
+		case Srv_call:
+			handleCallAfter(param);
+			break;
+
+		case query:
+		case Srv_query:
+			handleUriAfter(param);
+			break;
+
+		case Srv_getCurrentSyncs:
+		case Srv_getCurrentSyncsAsUser:
+			if (param.getResult() != null)
+				if (isRestricted(param)) {
+					int uid = Binder.getCallingUid();
+					@SuppressWarnings("unchecked")
+					List<SyncInfo> listSync = (List<SyncInfo>) param.getResult();
+					List<SyncInfo> listFiltered = new ArrayList<SyncInfo>();
+					for (SyncInfo sync : listSync)
+						if (XAccountManager.isAccountAllowed(sync.account, uid))
+							listFiltered.add(sync);
+					param.setResult(listFiltered);
+				}
+			break;
+		}
 	}
 
 	@SuppressLint("DefaultLocale")
@@ -115,7 +304,6 @@ public class XContentResolver extends XHook {
 		if (param.args.length > 1 && param.args[0] instanceof Uri) {
 			String uri = ((Uri) param.args[0]).toString().toLowerCase();
 			String[] projection = (param.args[1] instanceof String[] ? (String[]) param.args[1] : null);
-			Util.log(this, Log.INFO, "Before uri=" + uri);
 
 			if (uri.startsWith("content://com.android.contacts/contacts/name_phone_or_email")) {
 				// Do nothing
@@ -160,7 +348,6 @@ public class XContentResolver extends XHook {
 			String[] projection = (param.args[1] instanceof String[] ? (String[]) param.args[1] : null);
 			String selection = (param.args[2] instanceof String ? (String) param.args[2] : null);
 			Cursor cursor = (Cursor) param.getResult();
-			Util.log(this, Log.INFO, "After uri=" + uri);
 
 			if (uri.startsWith("content://applications")) {
 				// Applications provider: allow selected applications
@@ -169,7 +356,7 @@ public class XContentResolver extends XHook {
 					while (cursor.moveToNext()) {
 						int colPackage = cursor.getColumnIndex("package");
 						String packageName = (colPackage < 0 ? null : cursor.getString(colPackage));
-						if (packageName != null && XPackageManager.isPackageAllowed(packageName))
+						if (packageName != null && XPackageManager.isPackageAllowed(0, packageName))
 							copyColumns(cursor, result);
 					}
 					result.respond(cursor.getExtras());
@@ -188,7 +375,7 @@ public class XContentResolver extends XHook {
 							if (ikey == 0 && ivalue == 1 && cursor.getColumnCount() == 2) {
 								MatrixCursor result = new MatrixCursor(cursor.getColumnNames());
 								while (cursor.moveToNext()) {
-									if ("android_id".equals(cursor.getString(ikey)))
+									if ("android_id".equals(cursor.getString(ikey)) && cursor.getString(ivalue) != null)
 										result.addRow(new Object[] { "android_id",
 												PrivacyManager.getDefacedProp(Binder.getCallingUid(), "GSF_ID") });
 									else
@@ -230,6 +417,11 @@ public class XContentResolver extends XHook {
 						if (added)
 							listColumn.remove(listColumn.size() - 1);
 
+						// Get blacklist setting
+						int uid = Binder.getCallingUid();
+						boolean blacklist = PrivacyManager
+								.getSettingBool(-uid, PrivacyManager.cSettingBlacklist, false);
+
 						MatrixCursor result = new MatrixCursor(listColumn.toArray(new String[0]));
 
 						// Filter rows
@@ -239,8 +431,10 @@ public class XContentResolver extends XHook {
 							while (cursor.moveToNext()) {
 								// Check if allowed
 								long id = (urlid >= 0 ? urlid : cursor.getLong(iid));
-								boolean allowed = PrivacyManager.getSettingBool(-Binder.getCallingUid(),
-										Meta.cTypeContact, Long.toString(id), false, true);
+								boolean allowed = PrivacyManager.getSettingBool(-uid, Meta.cTypeContact,
+										Long.toString(id), false);
+								if (blacklist)
+									allowed = !allowed;
 								if (allowed)
 									copyColumns(cursor, result, listColumn.size());
 							}
@@ -286,7 +480,7 @@ public class XContentResolver extends XHook {
 				}
 
 				else if (uri.startsWith("content://call_log")) {
-					restrictionName = PrivacyManager.cPhone;
+					restrictionName = PrivacyManager.cCalling;
 					methodName = "CallLogProvider";
 				}
 
@@ -357,6 +551,63 @@ public class XContentResolver extends XHook {
 				}
 			}
 		}
+	}
+
+	private void handleCallAfter(XParam param) throws Throwable {
+		if (param.args.length > 1 && param.args[0] instanceof String && param.args[1] instanceof String) {
+			String method = (String) param.args[0];
+			String request = (String) param.args[1];
+
+			if ("GET_secure".equals(method)) {
+				if (Settings.Secure.ANDROID_ID.equals(request)) {
+					if (!hasEmptyValue(param.getResult()))
+						if (isRestricted(param, PrivacyManager.cIdentification, "Srv_Android_ID")) {
+							int uid = Binder.getCallingUid();
+							String value = (String) PrivacyManager.getDefacedProp(uid, "ANDROID_ID");
+							Bundle bundle = new Bundle(1);
+							bundle.putString("value", value);
+							param.setResult(bundle);
+						}
+
+				}
+
+			} else if ("GET_system".equals(method)) {
+				// Do nothing
+
+			} else if ("GET_global".equals(method)) {
+				if ("default_dns_server".equals(request)) {
+					if (!hasEmptyValue(param.getResult()))
+						if (isRestricted(param, PrivacyManager.cNetwork, "Srv_Default_DNS")) {
+							int uid = Binder.getCallingUid();
+							InetAddress value = (InetAddress) PrivacyManager.getDefacedProp(uid, "InetAddress");
+							Bundle bundle = new Bundle(1);
+							bundle.putString("value", value.getHostAddress());
+							param.setResult(bundle);
+						}
+
+				} else if ("wifi_country_code".equals(request)) {
+					if (!hasEmptyValue(param.getResult()))
+						if (isRestricted(param, PrivacyManager.cNetwork, "Srv_WiFi_Country")) {
+							int uid = Binder.getCallingUid();
+							String value = (String) PrivacyManager.getDefacedProp(uid, "CountryIso");
+							Bundle bundle = new Bundle(1);
+							bundle.putString("value", value == null ? null : value.toLowerCase(Locale.ROOT));
+							param.setResult(bundle);
+						}
+				}
+			}
+		}
+	}
+
+	// Helper methods
+
+	private boolean hasEmptyValue(Object result) {
+		Bundle bundle = (Bundle) result;
+		if (bundle == null)
+			return true;
+		if (!bundle.containsKey("value"))
+			return true;
+		return (bundle.get("value") == null);
 	}
 
 	private String getIdForUri(String uri) {

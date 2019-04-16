@@ -14,7 +14,7 @@ public class RState {
 	public boolean partialRestricted = false;
 	public boolean partialAsk = false;
 
-	public RState(int uid, String restrictionName, String methodName) {
+	public RState(int uid, String restrictionName, String methodName, Version version) {
 		mUid = uid;
 		mRestrictionName = restrictionName;
 		mMethodName = methodName;
@@ -22,9 +22,9 @@ public class RState {
 		int userId = Util.getUserId(Process.myUid());
 
 		// Get if on demand
-		boolean onDemand = PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingOnDemand, true, false);
+		boolean onDemand = PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingOnDemand, true);
 		if (onDemand)
-			onDemand = PrivacyManager.getSettingBool(-uid, PrivacyManager.cSettingOnDemand, false, false);
+			onDemand = PrivacyManager.getSettingBool(-uid, PrivacyManager.cSettingOnDemand, false);
 
 		boolean allRestricted = true;
 		boolean someRestricted = false;
@@ -49,10 +49,17 @@ public class RState {
 				someRestricted = query.restricted;
 				someAsk = !query.asked;
 				for (PRestriction restriction : PrivacyManager.getRestrictionList(uid, restrictionName)) {
+					Hook hook = PrivacyManager.getHook(restrictionName, restriction.methodName);
+					if (version != null && hook != null && hook.getFrom() != null
+							&& version.compareTo(hook.getFrom()) < 0)
+						continue;
+
 					allRestricted = (allRestricted && restriction.restricted);
 					someRestricted = (someRestricted || restriction.restricted);
-					allAsk = (allAsk && !restriction.asked);
-					someAsk = (someAsk || !restriction.asked);
+					if (hook == null || hook.canOnDemand()) {
+						allAsk = (allAsk && !restriction.asked);
+						someAsk = (someAsk || !restriction.asked);
+					}
 				}
 				asked = query.asked;
 			}
@@ -64,10 +71,13 @@ public class RState {
 			asked = query.asked;
 		}
 
+		boolean isApp = PrivacyManager.isApplication(uid);
+		boolean odSystem = PrivacyManager.getSettingBool(userId, PrivacyManager.cSettingOnDemandSystem, false);
+
 		restricted = (allRestricted || someRestricted);
-		asked = (!onDemand || !PrivacyManager.isApplication(uid) || asked);
+		asked = (!onDemand || !(isApp || odSystem) || asked);
 		partialRestricted = (!allRestricted && someRestricted);
-		partialAsk = (onDemand && PrivacyManager.isApplication(uid) && !allAsk && someAsk);
+		partialAsk = (onDemand && (isApp || odSystem) && !allAsk && someAsk);
 	}
 
 	public void toggleRestriction() {
@@ -105,7 +115,8 @@ public class RState {
 			List<PRestriction> listPRestriction = new ArrayList<PRestriction>();
 			listPRestriction.add(new PRestriction(mUid, mRestrictionName, mMethodName, restricted, asked));
 			PrivacyManager.setRestrictionList(listPRestriction);
-			PrivacyManager.setSetting(mUid, PrivacyManager.cSettingState, Integer.toString(ActivityMain.STATE_CHANGED));
+			PrivacyManager.setSetting(mUid, PrivacyManager.cSettingState,
+					Integer.toString(ApplicationInfoEx.STATE_CHANGED));
 			PrivacyManager.setSetting(mUid, PrivacyManager.cSettingModifyTime,
 					Long.toString(System.currentTimeMillis()));
 		}

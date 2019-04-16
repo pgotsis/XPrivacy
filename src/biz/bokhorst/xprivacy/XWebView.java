@@ -4,21 +4,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 import android.os.Binder;
-import android.util.Log;
 import android.webkit.WebView;
 
 public class XWebView extends XHook {
 	private Methods mMethod;
-	private static final List<String> mWebSettings = new ArrayList<String>();
 
 	private XWebView(Methods method, String restrictionName) {
 		super(restrictionName, (method == Methods.WebView ? null : method.name()), (method == Methods.WebView ? method
 				.name() : null));
-		mMethod = method;
-	}
-
-	private XWebView(Methods method, String restrictionName, int sdk) {
-		super(restrictionName, method.name(), null, sdk);
 		mMethod = method;
 	}
 
@@ -32,73 +25,79 @@ public class XWebView extends XHook {
 	// public WebView(Context context, AttributeSet attrs)
 	// public WebView(Context context, AttributeSet attrs, int defStyle)
 	// public WebView(Context context, AttributeSet attrs, int defStyle, boolean privateBrowsing)
+	// public WebView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes)
 	// protected WebView(Context context, AttributeSet attrs, int defStyle, Map<String, Object> javaScriptInterfaces, boolean privateBrowsing)
 	// public WebSettings getSettings()
 	// public void loadUrl(String url)
 	// public void loadUrl(String url, Map<String, String> additionalHttpHeaders)
-	// frameworks/base/core/java/android/webkit/WebView.java
+	// public postUrl(String url, byte[] postData)
 	// http://developer.android.com/reference/android/webkit/WebView.html
+	// http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.0.2_r1/android/webkit/WebView.java/
 
 	// @formatter:on
 
 	private enum Methods {
-		WebView, loadUrl, getSettings
+		WebView, loadUrl, postUrl, getSettings
 	};
 
 	public static List<XHook> getInstances() {
 		List<XHook> listHook = new ArrayList<XHook>();
-		listHook.add(new XWebView(Methods.WebView, PrivacyManager.cView));
+		listHook.add(new XWebView(Methods.WebView, null));
 		listHook.add(new XWebView(Methods.loadUrl, PrivacyManager.cView));
-		listHook.add(new XWebView(Methods.getSettings, null, 1));
+		listHook.add(new XWebView(Methods.postUrl, PrivacyManager.cView));
+		listHook.add(new XWebView(Methods.getSettings, null));
 		return listHook;
 	}
 
 	@Override
 	protected void before(XParam param) throws Throwable {
-		if (mMethod == Methods.WebView || mMethod == Methods.getSettings) {
+		switch (mMethod) {
+		case WebView:
+		case getSettings:
 			// Do nothing
+			break;
 
-		} else if (mMethod == Methods.loadUrl) {
+		case loadUrl:
+		case postUrl:
 			if (param.args.length > 0 && param.thisObject instanceof WebView) {
 				String extra = (param.args[0] instanceof String ? (String) param.args[0] : null);
-				if (isRestrictedExtra(param, extra)) {
-					String ua = (String) PrivacyManager.getDefacedProp(Binder.getCallingUid(), "UA");
-					WebView webView = (WebView) param.thisObject;
-					if (webView.getSettings() != null)
-						webView.getSettings().setUserAgentString(ua);
-				}
+				if (isRestrictedExtra(param, extra))
+					param.setResult(null);
 			}
-
-		} else
-			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());
+			break;
+		}
 	}
 
 	@Override
 	protected void after(XParam param) throws Throwable {
-		if (mMethod == Methods.WebView) {
+		switch (mMethod) {
+		case WebView:
 			if (param.args.length > 0 && param.thisObject instanceof WebView) {
-				int uid = Binder.getCallingUid();
-				if (getRestricted(uid)) {
+				if (isRestricted(param, PrivacyManager.cView, "initUserAgentString")) {
 					String ua = (String) PrivacyManager.getDefacedProp(Binder.getCallingUid(), "UA");
 					WebView webView = (WebView) param.thisObject;
 					if (webView.getSettings() != null)
 						webView.getSettings().setUserAgentString(ua);
 				}
 			}
+			break;
 
-		} else if (mMethod == Methods.loadUrl) {
+		case loadUrl:
+		case postUrl:
 			// Do nothing
+			break;
 
-		} else if (mMethod == Methods.getSettings) {
+		case getSettings:
 			if (param.getResult() != null) {
 				Class<?> clazz = param.getResult().getClass();
-				if (!mWebSettings.contains(clazz.getName())) {
-					mWebSettings.add(clazz.getName());
-					XPrivacy.hookAll(XWebSettings.getInstances(param.getResult()), getSecret());
+				if (PrivacyManager.getTransient(clazz.getName(), null) == null) {
+					PrivacyManager.setTransient(clazz.getName(), Boolean.toString(true));
+					XPrivacy.hookAll(XWebSettings.getInstances(param.getResult()), clazz.getClassLoader(), getSecret(),
+							true);
 				}
 			}
+			break;
 
-		} else
-			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());
+		}
 	}
 }

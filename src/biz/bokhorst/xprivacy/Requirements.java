@@ -6,15 +6,18 @@ import java.lang.reflect.Method;
 import java.net.Inet4Address;
 import java.net.InterfaceAddress;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.location.GpsStatus;
 import android.net.Uri;
 import android.net.wifi.WifiInfo;
 import android.os.Build;
@@ -28,11 +31,7 @@ public class Requirements {
 	@SuppressWarnings("unchecked")
 	public static void check(final ActivityBase context) {
 		// Check Android version
-		if (Build.VERSION.SDK_INT != Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1
-				&& Build.VERSION.SDK_INT != Build.VERSION_CODES.JELLY_BEAN
-				&& Build.VERSION.SDK_INT != Build.VERSION_CODES.JELLY_BEAN_MR1
-				&& Build.VERSION.SDK_INT != Build.VERSION_CODES.JELLY_BEAN_MR2
-				&& Build.VERSION.SDK_INT != Build.VERSION_CODES.KITKAT) {
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1) {
 			AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(context);
 			alertDialogBuilder.setTitle(R.string.app_name);
 			alertDialogBuilder.setMessage(R.string.app_wrongandroid);
@@ -42,30 +41,8 @@ public class Requirements {
 						@Override
 						public void onClick(DialogInterface dialog, int which) {
 							Intent androidIntent = new Intent(Intent.ACTION_VIEW);
-							androidIntent.setData(Uri.parse("https://github.com/M66B/XPrivacy?mobile=0#installation"));
+							androidIntent.setData(Uri.parse("https://github.com/M66B/XPrivacy#installation"));
 							context.startActivity(androidIntent);
-						}
-					});
-			AlertDialog alertDialog = alertDialogBuilder.create();
-			alertDialog.show();
-		}
-
-		// Check Xposed version
-		int xVersion = Util.getXposedAppProcessVersion();
-		if (xVersion < PrivacyManager.cXposedAppProcessMinVersion) {
-			String msg = String.format(context.getString(R.string.app_notxposed),
-					PrivacyManager.cXposedAppProcessMinVersion);
-			AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(context);
-			alertDialogBuilder.setTitle(R.string.app_name);
-			alertDialogBuilder.setMessage(msg);
-			alertDialogBuilder.setIcon(context.getThemed(R.attr.icon_launcher));
-			alertDialogBuilder.setPositiveButton(context.getString(android.R.string.ok),
-					new DialogInterface.OnClickListener() {
-						@Override
-						public void onClick(DialogInterface dialog, int which) {
-							Intent xposedIntent = new Intent(Intent.ACTION_VIEW);
-							xposedIntent.setData(Uri.parse("http://forum.xda-developers.com/showthread.php?t=1574401"));
-							context.startActivity(xposedIntent);
 						}
 					});
 			AlertDialog alertDialog = alertDialogBuilder.create();
@@ -85,6 +62,7 @@ public class Requirements {
 				sendSupportInfo(ex.toString(), context);
 			}
 		} else {
+			// @formatter:off
 			AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(context);
 			alertDialogBuilder.setTitle(R.string.app_name);
 			alertDialogBuilder.setMessage(R.string.app_notenabled);
@@ -93,12 +71,15 @@ public class Requirements {
 					new DialogInterface.OnClickListener() {
 						@Override
 						public void onClick(DialogInterface dialog, int which) {
-							Intent xInstallerIntent = context.getPackageManager().getLaunchIntentForPackage(
-									"de.robv.android.xposed.installer");
-							if (xInstallerIntent != null)
-								context.startActivity(xInstallerIntent);
+							Intent xInstallerIntent = new Intent("de.robv.android.xposed.installer.OPEN_SECTION")
+								.setPackage("de.robv.android.xposed.installer")
+								.putExtra("section", "modules")
+								.putExtra("module", context.getPackageName())
+								.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+							context.startActivity(xInstallerIntent);
 						}
 					});
+			// @formatter:on
 			AlertDialog alertDialog = alertDialogBuilder.create();
 			alertDialog.show();
 		}
@@ -128,7 +109,7 @@ public class Requirements {
 
 		// Check activity thread
 		try {
-			Class<?> clazz = Class.forName("android.app.ActivityThread");
+			Class<?> clazz = Class.forName("android.app.ActivityThread", false, null);
 			try {
 				clazz.getDeclaredMethod("unscheduleGcIdler");
 			} catch (NoSuchMethodException ex) {
@@ -140,12 +121,12 @@ public class Requirements {
 
 		// Check activity thread receiver data
 		try {
-			Class<?> clazz = Class.forName("android.app.ActivityThread$ReceiverData");
+			Class<?> clazz = Class.forName("android.app.ActivityThread$ReceiverData", false, null);
 			if (!checkField(clazz, "intent"))
 				reportClass(clazz, context);
 		} catch (ClassNotFoundException ex) {
 			try {
-				reportClass(Class.forName("android.app.ActivityThread"), context);
+				reportClass(Class.forName("android.app.ActivityThread", false, null), context);
 			} catch (ClassNotFoundException exex) {
 				sendSupportInfo(exex.toString(), context);
 			}
@@ -153,7 +134,7 @@ public class Requirements {
 
 		// Check file utils
 		try {
-			Class<?> clazz = Class.forName("android.os.FileUtils");
+			Class<?> clazz = Class.forName("android.os.FileUtils", false, null);
 			try {
 				clazz.getDeclaredMethod("setPermissions", String.class, int.class, int.class, int.class);
 			} catch (NoSuchMethodException ex) {
@@ -169,28 +150,43 @@ public class Requirements {
 			reportClass(InterfaceAddress.class, context);
 
 		// Check package manager service
-		try {
-			Class<?> clazz = Class.forName("com.android.server.pm.PackageManagerService");
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP)
 			try {
-				if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN)
-					clazz.getDeclaredMethod("getPackageUid", String.class, int.class);
-				else
-					clazz.getDeclaredMethod("getPackageUid", String.class);
-			} catch (NoSuchMethodException ex) {
-				reportClass(clazz, context);
+				Class<?> clazz = Class.forName("com.android.server.pm.PackageManagerService", false, null);
+				try {
+					try {
+						clazz.getDeclaredMethod("getPackageUid", String.class, int.class);
+					} catch (NoSuchMethodException ignored) {
+						clazz.getDeclaredMethod("getPackageUid", String.class);
+					}
+				} catch (NoSuchMethodException ex) {
+					reportClass(clazz, context);
+				}
+			} catch (ClassNotFoundException ex) {
+				sendSupportInfo(ex.toString(), context);
 			}
-		} catch (ClassNotFoundException ex) {
-			sendSupportInfo(ex.toString(), context);
-		}
+
+		// Check GPS status
+		if (!checkField(GpsStatus.class, "mSatellites"))
+			reportClass(GpsStatus.class, context);
 
 		// Check service manager
 		try {
-			Class<?> clazz = Class.forName("android.os.ServiceManager");
+			Class<?> clazz = Class.forName("android.os.ServiceManager", false, null);
 			try {
+				// @formatter:off
+				// public static void addService(String name, IBinder service)
+				// public static void addService(String name, IBinder service, boolean allowIsolated)
 				// public static String[] listServices()
 				// public static IBinder checkService(String name)
+				// @formatter:on
+
 				Method listServices = clazz.getDeclaredMethod("listServices");
 				Method getService = clazz.getDeclaredMethod("getService", String.class);
+				if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN)
+					clazz.getDeclaredMethod("addService", String.class, IBinder.class, boolean.class);
+				else
+					clazz.getDeclaredMethod("addService", String.class, IBinder.class);
 
 				// Get services
 				Map<String, String> mapService = new HashMap<String, String>();
@@ -209,9 +205,10 @@ public class Requirements {
 					List<String> listMissing = new ArrayList<String>();
 					for (String name : XBinder.cServiceName) {
 						String descriptor = XBinder.cServiceDescriptor.get(i++);
-						if (descriptor != null && !name.equals("iphonesubinfo") && !name.equals("iphonesubinfo_msim")) {
+						if (descriptor != null && !XBinder.cServiceOptional.contains(name)) {
 							// Check name
 							boolean checkDescriptor = false;
+
 							if (name.equals("telephony.registry")) {
 								if (mapService.containsKey(name))
 									checkDescriptor = true;
@@ -222,6 +219,18 @@ public class Requirements {
 								if (mapService.containsKey(name))
 									checkDescriptor = true;
 								else if (!mapService.containsKey("telephony.registry"))
+									listMissing.add(name);
+
+							} else if (name.equals("bluetooth")) {
+								if (mapService.containsKey(name))
+									checkDescriptor = true;
+								else if (!mapService.containsKey("bluetooth_manager"))
+									listMissing.add(name);
+
+							} else if (name.equals("bluetooth_manager")) {
+								if (mapService.containsKey(name))
+									checkDescriptor = true;
+								else if (!mapService.containsKey("bluetooth"))
 									listMissing.add(name);
 
 							} else {
@@ -267,7 +276,7 @@ public class Requirements {
 		// Check mWifiSsid.octets
 		if (checkField(WifiInfo.class, "mWifiSsid"))
 			try {
-				Class<?> clazz = Class.forName("android.net.wifi.WifiSsid");
+				Class<?> clazz = Class.forName("android.net.wifi.WifiSsid", false, null);
 				try {
 					clazz.getDeclaredMethod("createFromAsciiEncoded", String.class);
 				} catch (NoSuchMethodException ex) {
@@ -283,6 +292,44 @@ public class Requirements {
 		} catch (Throwable ex) {
 			reportClass(Inet4Address.class, context);
 		}
+
+		// Check context services
+		checkService(context, Context.ACCOUNT_SERVICE,
+				new String[] { "android.accounts.AccountManager", "com.intel.arkham.ExtendAccountManager" /* Asus */,
+						"android.privacy.surrogate.PrivacyAccountManager" /* PDroid */});
+		checkService(context, Context.ACTIVITY_SERVICE, new String[] { "android.app.ActivityManager",
+				"android.app.ActivityManagerEx" });
+		checkService(context, Context.CLIPBOARD_SERVICE, new String[] { "android.content.ClipboardManager" });
+		checkService(context, Context.CONNECTIVITY_SERVICE, new String[] { "android.net.ConnectivityManager",
+				"android.net.ConnectivityManagerEx", "android.net.MultiSimConnectivityManager",
+				"android.privacy.surrogate.PrivacyConnectivityManager" /* PDroid */});
+		checkService(context, Context.LOCATION_SERVICE,
+				new String[] { "android.location.LocationManager", "android.location.ZTEPrivacyLocationManager",
+						"android.privacy.surrogate.PrivacyLocationManager" /* PDroid */});
+		Class<?> serviceClass = context.getPackageManager().getClass();
+		if (!"android.app.ApplicationPackageManager".equals(serviceClass.getName())
+				&& !"amazon.content.pm.AmazonPackageManagerImpl".equals(serviceClass.getName()))
+			reportClass(serviceClass, context);
+		checkService(context, Context.SENSOR_SERVICE, new String[] { "android.hardware.SensorManager",
+				"android.hardware.SystemSensorManager" });
+		checkService(context, Context.TELEPHONY_SERVICE, new String[] { "android.telephony.TelephonyManager",
+				"android.telephony.MSimTelephonyManager", "android.telephony.MultiSimTelephonyManager",
+				"android.telephony.ZTEPrivacyTelephonyManager", "android.telephony.ZTEPrivacyMSimTelephonyManager",
+				"com.motorola.android.telephony.MotoTelephonyManager",
+				"android.privacy.surrogate.PrivacyTelephonyManager" /* PDroid */});
+		checkService(context, Context.WINDOW_SERVICE, new String[] { "android.view.WindowManagerImpl",
+				"android.view.Window$LocalWindowManager", "amazon.view.AmazonWindowManagerImpl" });
+		checkService(context, Context.WIFI_SERVICE, new String[] { "android.net.wifi.WifiManager",
+				"com.amazon.net.AmazonWifiManager", "com.amazon.android.service.AmazonWifiManager",
+				"android.privacy.surrogate.PrivacyWifiManager" /* PDroid */});
+	}
+
+	public static void checkService(ActivityBase context, String name, String[] className) {
+		Object service = context.getSystemService(name);
+		if (service == null)
+			sendSupportInfo("Service missing name=" + name, context);
+		else if (!Arrays.asList(className).contains(service.getClass().getName()))
+			reportClass(service.getClass(), context);
 	}
 
 	public static void checkCompatibility(ActivityBase context) {
@@ -318,35 +365,9 @@ public class Requirements {
 		}
 	}
 
-	private static void reportClass(final Class<?> clazz, final ActivityBase context) {
-		String msg = String.format("Incompatible %s", clazz.getName());
-		Util.log(null, Log.WARN, msg);
-
-		AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(context);
-		alertDialogBuilder.setTitle(R.string.app_name);
-		alertDialogBuilder.setMessage(msg);
-		alertDialogBuilder.setIcon(context.getThemed(R.attr.icon_launcher));
-		alertDialogBuilder.setPositiveButton(context.getString(android.R.string.ok),
-				new DialogInterface.OnClickListener() {
-					@Override
-					public void onClick(DialogInterface dialog, int which) {
-						sendClassInfo(clazz, context);
-					}
-				});
-		alertDialogBuilder.setNegativeButton(context.getString(android.R.string.cancel),
-				new DialogInterface.OnClickListener() {
-					@Override
-					public void onClick(DialogInterface dialog, int which) {
-						dialog.dismiss();
-					}
-				});
-		AlertDialog alertDialog = alertDialogBuilder.create();
-		alertDialog.show();
-	}
-
-	private static void sendClassInfo(Class<?> clazz, ActivityBase context) {
+	private static void reportClass(Class<?> clazz, ActivityBase context) {
 		StringBuilder sb = new StringBuilder();
-		sb.append(clazz.getName());
+		sb.append(String.format("Incompatible %s", clazz.getName()));
 		sb.append("\r\n");
 		sb.append("\r\n");
 		for (Constructor<?> constructor : clazz.getConstructors()) {
@@ -368,7 +389,9 @@ public class Requirements {
 	}
 
 	public static void sendSupportInfo(final String text, final ActivityBase context) {
-		if (Util.hasValidFingerPrint(context) || Util.isDebuggable(context)) {
+		Util.log(null, Log.WARN, text);
+
+		if (Util.hasValidFingerPrint(context) && !"Genymotion".equals(Build.MANUFACTURER)) {
 			AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(context);
 			alertDialogBuilder.setTitle(R.string.app_name);
 			alertDialogBuilder.setMessage(R.string.msg_support_info);
@@ -380,15 +403,24 @@ public class Requirements {
 							String ourVersion = Util.getSelfVersionName(context);
 							StringBuilder sb = new StringBuilder(text);
 							sb.insert(0, "\r\n");
-							sb.insert(0, String.format("Model: %s (%s)\r\n", Build.MODEL, Build.PRODUCT));
-							sb.insert(0, String.format("Android version: %s (SDK %d)\r\n", Build.VERSION.RELEASE,
+							sb.insert(0, String.format("Id: %s\r\n", Build.ID));
+							sb.insert(0, String.format("Display: %s\r\n", Build.DISPLAY));
+							sb.insert(0, String.format("Host: %s\r\n", Build.HOST));
+							sb.insert(0, String.format("Device: %s\r\n", Build.DEVICE));
+							sb.insert(0, String.format("Product: %s\r\n", Build.PRODUCT));
+							sb.insert(0, String.format("Model: %s\r\n", Build.MODEL));
+							sb.insert(0, String.format("Manufacturer: %s\r\n", Build.MANUFACTURER));
+							sb.insert(0, String.format("Brand: %s\r\n", Build.BRAND));
+							sb.insert(0, "\r\n");
+							sb.insert(0, String.format("Android: %s (SDK %d)\r\n", Build.VERSION.RELEASE,
 									Build.VERSION.SDK_INT));
-							sb.insert(0, String.format("XPrivacy version: %s\r\n", ourVersion));
+							sb.insert(0, String.format("XPrivacy: %s\r\n", ourVersion));
 
 							Intent sendEmail = new Intent(Intent.ACTION_SEND);
 							sendEmail.setType("message/rfc822");
-							sendEmail.putExtra(Intent.EXTRA_EMAIL, new String[] { "marcel+xprivacy@faircode.eu" });
-							sendEmail.putExtra(Intent.EXTRA_SUBJECT, "XPrivacy " + ourVersion + " support info");
+							sendEmail.putExtra(Intent.EXTRA_EMAIL, new String[] { "marcel+support@faircode.eu" });
+							sendEmail.putExtra(Intent.EXTRA_SUBJECT, "XPrivacy " + ourVersion + "/"
+									+ Build.VERSION.RELEASE + " support info");
 							sendEmail.putExtra(Intent.EXTRA_TEXT, sb.toString());
 							try {
 								context.startActivity(sendEmail);

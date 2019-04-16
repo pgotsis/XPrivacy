@@ -5,18 +5,24 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 
+import android.annotation.SuppressLint;
+import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.Process;
 import android.support.v4.app.NavUtils;
 import android.support.v4.app.TaskStackBuilder;
+import android.support.v7.widget.Toolbar;
 import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -62,21 +68,22 @@ public class ActivityUsage extends ActivityBase {
 
 		// Set layout
 		setContentView(R.layout.usagelist);
+		setSupportActionBar((Toolbar) findViewById(R.id.widgetToolbar));
 
 		// Get uid
 		Bundle extras = getIntent().getExtras();
 		mUid = (extras == null ? 0 : extras.getInt(cUid, 0));
 		mRestrictionName = (extras == null ? null : extras.getString(cRestriction));
 
-		// Set title
-		setTitle(String.format("%s - %s", getString(R.string.app_name), getString(R.string.menu_usage)));
+		// Show title
+		updateTitle();
 
 		// Start task to get usage data
 		UsageTask usageTask = new UsageTask();
 		usageTask.executeOnExecutor(mExecutor, (Object) null);
 
 		// Up navigation
-		getActionBar().setDisplayHomeAsUpEnabled(true);
+		getSupportActionBar().setDisplayHomeAsUpEnabled(true);
 	}
 
 	@Override
@@ -97,6 +104,12 @@ public class ActivityUsage extends ActivityBase {
 	}
 
 	@Override
+	public boolean onPrepareOptionsMenu(Menu menu) {
+		menu.findItem(R.id.menu_whitelists).setVisible(mUid != 0);
+		return super.onPrepareOptionsMenu(menu);
+	}
+
+	@Override
 	public boolean onOptionsItemSelected(MenuItem item) {
 		UsageTask usageTask;
 		switch (item.getItemId()) {
@@ -108,20 +121,40 @@ public class ActivityUsage extends ActivityBase {
 				else
 					NavUtils.navigateUpTo(this, upIntent);
 			return true;
+
 		case R.id.menu_usage_all:
 			mAll = !mAll;
 			if (mUsageAdapter != null)
 				mUsageAdapter.getFilter().filter(Boolean.toString(mAll));
 			return true;
+
 		case R.id.menu_refresh:
+			updateTitle();
 			usageTask = new UsageTask();
 			usageTask.executeOnExecutor(mExecutor, (Object) null);
 			return true;
+
 		case R.id.menu_clear:
 			PrivacyManager.deleteUsage(mUid);
 			usageTask = new UsageTask();
 			usageTask.executeOnExecutor(mExecutor, (Object) null);
 			return true;
+
+		case R.id.menu_whitelists:
+			if (Util.hasProLicense(this) == null) {
+				// Redirect to pro page
+				Util.viewUri(this, ActivityMain.cProUri);
+			} else {
+				WhitelistTask whitelistsTask = new WhitelistTask(mUid, null, this);
+				whitelistsTask.executeOnExecutor(mExecutor, (Object) null);
+			}
+			return true;
+
+		case R.id.menu_settings:
+			Intent intent = new Intent(this, ActivitySettings.class);
+			startActivity(intent);
+			return true;
+
 		default:
 			return super.onOptionsItemSelected(item);
 		}
@@ -219,6 +252,7 @@ public class ActivityUsage extends ActivityBase {
 			public TextView tvApp;
 			public TextView tvRestriction;
 			public TextView tvParameter;
+			public TextView tvValue;
 
 			public ViewHolder(View theRow, int thePosition) {
 				row = theRow;
@@ -230,6 +264,7 @@ public class ActivityUsage extends ActivityBase {
 				tvApp = (TextView) row.findViewById(R.id.tvApp);
 				tvRestriction = (TextView) row.findViewById(R.id.tvRestriction);
 				tvParameter = (TextView) row.findViewById(R.id.tvParameter);
+				tvValue = (TextView) row.findViewById(R.id.tvValue);
 			}
 		}
 
@@ -269,7 +304,7 @@ public class ActivityUsage extends ActivityBase {
 					holder.imgIcon.setImageDrawable(icon);
 					holder.imgIcon.setVisibility(View.VISIBLE);
 
-					View.OnClickListener listener = new View.OnClickListener() {
+					View.OnClickListener clickListener = new View.OnClickListener() {
 						@Override
 						public void onClick(View view) {
 							PRestriction usageData = mUsageAdapter.getItem(position);
@@ -281,13 +316,76 @@ public class ActivityUsage extends ActivityBase {
 						}
 					};
 
-					holder.llUsage.setOnClickListener(listener);
-					holder.tvRestriction.setOnClickListener(listener);
+					View.OnLongClickListener longClickListener = new View.OnLongClickListener() {
+						@Override
+						public boolean onLongClick(View view) {
+							int userId = Util.getUserId(Process.myUid());
+							final PRestriction usageData = mUsageAdapter.getItem(position);
+							final Hook hook = PrivacyManager.getHook(usageData.restrictionName, usageData.methodName);
+
+							boolean isApp = PrivacyManager.isApplication(usageData.uid);
+							boolean odSystem = PrivacyManager.getSettingBool(userId,
+									PrivacyManager.cSettingOnDemandSystem, false);
+							final boolean wnomod = PrivacyManager.getSettingBool(usageData.uid,
+									PrivacyManager.cSettingWhitelistNoModify, false);
+
+							if ((isApp || odSystem) && hook != null && hook.whitelist() != null
+									&& usageData.extra != null) {
+								if (Util.hasProLicense(ActivityUsage.this) == null)
+									Util.viewUri(ActivityUsage.this, ActivityMain.cProUri);
+								else {
+									AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(ActivityUsage.this);
+									alertDialogBuilder.setTitle(R.string.menu_whitelists);
+									alertDialogBuilder.setMessage(usageData.restrictionName + "/"
+											+ usageData.methodName + "(" + usageData.extra + ")");
+									alertDialogBuilder.setIcon(getThemed(R.attr.icon_launcher));
+									alertDialogBuilder.setPositiveButton(getString(R.string.title_deny),
+											new DialogInterface.OnClickListener() {
+												@Override
+												public void onClick(DialogInterface dialog, int which) {
+													// Deny
+													PrivacyManager.setSetting(usageData.uid, hook.whitelist(),
+															usageData.extra, Boolean.toString(false));
+													if (!wnomod)
+														PrivacyManager.updateState(usageData.uid);
+												}
+											});
+									alertDialogBuilder.setNeutralButton(getString(R.string.title_allow),
+											new DialogInterface.OnClickListener() {
+												@Override
+												public void onClick(DialogInterface dialog, int which) {
+													// Allow
+													PrivacyManager.setSetting(usageData.uid, hook.whitelist(),
+															usageData.extra, Boolean.toString(true));
+													if (!wnomod)
+														PrivacyManager.updateState(usageData.uid);
+												}
+											});
+									alertDialogBuilder.setNegativeButton(getString(android.R.string.cancel),
+											new DialogInterface.OnClickListener() {
+												@Override
+												public void onClick(DialogInterface dialog, int which) {
+												}
+											});
+									AlertDialog alertDialog = alertDialogBuilder.create();
+									alertDialog.show();
+								}
+								return true;
+							} else
+								return false;
+						}
+					};
+
+					holder.llUsage.setOnClickListener(clickListener);
+					holder.tvRestriction.setOnClickListener(clickListener);
+					holder.llUsage.setOnLongClickListener(longClickListener);
+					holder.tvRestriction.setOnLongClickListener(longClickListener);
 				}
 			}
 		}
 
 		@Override
+		@SuppressLint("InflateParams")
 		public View getView(int position, View convertView, ViewGroup parent) {
 			ViewHolder holder;
 			if (convertView == null) {
@@ -320,10 +418,42 @@ public class ActivityUsage extends ActivityBase {
 			} else
 				holder.tvParameter.setVisibility(View.GONE);
 
+			if (usageData.value != null && mHasProLicense) {
+				holder.tvValue.setText(getString(R.string.title_original) + ": " + usageData.value);
+				holder.tvValue.setVisibility(View.VISIBLE);
+			} else
+				holder.tvValue.setVisibility(View.GONE);
+
 			// Async update
 			new HolderTask(position, holder, usageData).executeOnExecutor(mExecutor, (Object) null);
 
 			return convertView;
 		}
+	}
+
+	// Helpers
+
+	private void updateTitle() {
+		if (mUid == 0) {
+			// Get statistics
+			long count = 0;
+			long restricted = 0;
+			double persec = 0;
+			try {
+				@SuppressWarnings("rawtypes")
+				Map statistics = PrivacyService.getClient().getStatistics();
+				count = (Long) statistics.get("restriction_count");
+				restricted = (Long) statistics.get("restriction_restricted");
+				long uptime = (Long) statistics.get("uptime_milliseconds");
+				persec = (double) count / (uptime / 1000);
+			} catch (Throwable ex) {
+				Util.bug(null, ex);
+			}
+
+			// Set sub title
+			getSupportActionBar().setSubtitle(String.format("%d/%d %.2f/s", restricted, count, persec));
+		} else
+			getSupportActionBar().setSubtitle(
+					TextUtils.join(", ", new ApplicationInfoEx(this, mUid).getApplicationName()));
 	}
 }

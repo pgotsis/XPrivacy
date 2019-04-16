@@ -1,8 +1,9 @@
 #!/bin/bash
-grep -RIl "\<string name=\"msg_restrictedby" res | xargs sed -i -e "/msg_restrictedby/a \
-\ \ \ \ <string name=\"msg_service_version\">Privacy service version mismatch; did you reboot your device after upgrading XPrivacy?</string>"
-grep -RIl "\<string name=\"msg_restrictedby" res | xargs sed -i -e "/msg_restrictedby/a \
-\ \ \ \ <string name=\"msg_service_missing\">Privacy service not found; did you enable XPrivacy in the Xposed installer and reboot your device?</string>"
+grep -RIl "\<string name=\"msg_settings_specific" res | xargs sed -i -e '/msg_settings_specific/a \
+\ \ \ \ <string name=\"msg_corrupt\">The privacy database was reset, because it was corrupt</string>'
 
-#grep -RIl "\<string name=\"menu_apply" res | xargs sed -i -e '/menu_apply/d'
-#grep -RIl "\<string name=\"title_check_whitelist" res | xargs sed -i -e 's/Check to allow/Check to allow:/g'
+#grep -RIl "\<string name=\"title_template_merge" res | xargs sed -i -e 's/Apply template (merge)/Apply template (merge set)/g'
+
+#grep -RIl "\<string name=\"app_notxposed" res | xargs sed -i -e '/app_notxposed/d'
+#grep -RIl "\<string name=\"restrict_help_internet" res | xargs sed -i -e 's/internet</Internet</g'
+#grep -RIl "\<string name=\"settings_aosp" res | xargs sed -i -e 's/requires restart/requires reboot/g'

@@ -4,14 +4,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 import android.net.NetworkInfo;
-import android.util.Log;
 
 public class XConnectivityManager extends XHook {
 	private Methods mMethod;
 	private String mClassName;
+	private static final String cClassName = "android.net.ConnectivityManager";
 
 	private XConnectivityManager(Methods method, String restrictionName, String className) {
-		super(restrictionName, method.name(), null);
+		super(restrictionName, method.name(), "Connectivity." + method.name());
 		mMethod = method;
 		mClassName = className;
 	}
@@ -30,11 +30,15 @@ public class XConnectivityManager extends XHook {
 		getActiveNetworkInfo, getAllNetworkInfo, getNetworkInfo
 	};
 
-	public static List<XHook> getInstances(Object instance) {
-		String className = instance.getClass().getName();
+	public static List<XHook> getInstances(String className, boolean server) {
 		List<XHook> listHook = new ArrayList<XHook>();
-		for (Methods connmgr : Methods.values())
-			listHook.add(new XConnectivityManager(connmgr, PrivacyManager.cInternet, className));
+		if (!cClassName.equals(className)) {
+			if (className == null)
+				className = cClassName;
+
+			for (Methods connmgr : Methods.values())
+				listHook.add(new XConnectivityManager(connmgr, PrivacyManager.cInternet, className));
+		}
 		return listHook;
 	}
 
@@ -45,15 +49,17 @@ public class XConnectivityManager extends XHook {
 
 	@Override
 	protected void after(XParam param) throws Throwable {
-		if (mMethod == Methods.getActiveNetworkInfo || mMethod == Methods.getNetworkInfo) {
+		switch (mMethod) {
+		case getActiveNetworkInfo:
+		case getNetworkInfo:
 			if (param.getResult() != null && isRestricted(param))
 				param.setResult(null);
+			break;
 
-		} else if (mMethod == Methods.getAllNetworkInfo) {
+		case getAllNetworkInfo:
 			if (param.getResult() != null && isRestricted(param))
 				param.setResult(new NetworkInfo[0]);
-
-		} else
-			Util.log(this, Log.WARN, "Unknown method=" + param.method.getName());
+			break;
+		}
 	}
 }

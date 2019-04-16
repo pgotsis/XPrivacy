@@ -4,7 +4,7 @@
 
 	$min_diff = 0.50;
 	$max_confidence = 0.35;
-	$max_packages = 72;
+	$max_packages = 100;
 
 	function confidence($restricted, $not_restricted) {
 		// Agresti-Coull Interval
@@ -37,21 +37,20 @@
 	// Check if JSON request
 	parse_str($_SERVER['QUERY_STRING']);
 	if (!empty($format) && $format == 'json') {
-		// Send header
-		header('Content-Type: application/json');
-
 		// Get data
 		$ok = true;
 		$body = file_get_contents('php://input');
 		$data = json_decode($body);
 		if (empty($body) || empty($data)) {
-			log_error('json: empty request', $my_email, $data);
+			//log_error('json: empty request', $my_email, $data);
+			header('Content-Type: application/json');
 			echo json_encode(array('ok' => false, 'errno' => 101, 'error' => 'Empty request'));
 			exit();
 		}
 
 		// Check XPrivacy version
 		if (empty($data->xprivacy_version) || (int)$data->xprivacy_version < 219) {
+			header('Content-Type: application/json');
 			echo json_encode(array('ok' => false, 'errno' => 102, 'error' => 'Please upgrade to at least XPrivacy version 1.11'));
 			exit();
 		}
@@ -60,6 +59,7 @@
 		$db = new mysqli($db_host, $db_user, $db_password, $db_database);
 		if ($db->connect_errno) {
 			log_error('json: database connect: ' . $db->connect_error, $my_email, $data);
+			header('Content-Type: application/json');
 			echo json_encode(array('ok' => false, 'errno' => 103, 'error' => 'Error connecting to database'));
 			exit();
 		}
@@ -69,6 +69,8 @@
 
 		// Store/update settings
 		if (empty($action) || $action == 'submit') {
+			header('Content-Type: application/json');
+
 			// Validate
 			if (empty($data->android_id)) {
 				log_error('submit: Android ID missing', $my_email, $data);
@@ -172,7 +174,8 @@
 							$name = $restriction->restriction;
 						else
 							$name = $restriction->restriction . '/' . $restriction->method;
-						log_error('submit: restriction unknown: ' . $name , $my_email, $data);
+						echo json_encode(array('ok' => false, 'errno' => 207, 'error' => 'Unknown category'));
+						exit();
 					}
 				}
 			}
@@ -205,7 +208,7 @@
 					$sql = "INSERT INTO xprivacy (android_id_md5, android_sdk, xprivacy_version,";
 					$sql .= " package_name, package_version, package_version_code,";
 					$sql .= " restriction, method, restricted, allowed, used) VALUES ";
-					$sql .= "('" . $data->android_id . "'";
+					$sql .= "('" . $db->real_escape_string($data->android_id) . "'";
 					$sql .= "," . $db->real_escape_string($data->android_sdk) . "";
 					$sql .= "," . (empty($data->xprivacy_version) ? 'NULL' : (int)$data->xprivacy_version) . "";
 					$sql .= ",'" . $db->real_escape_string($data->package_name[$i]) . "'";
@@ -236,6 +239,8 @@
 
 		// Fetch settings
 		else if (!empty($action) && $action == 'fetch') {
+			header('Content-Type: application/json');
+
 			// Check credentials
 			$signature = '';
 			if (openssl_sign($data->email, $signature, $private_key, OPENSSL_ALGO_SHA1))
@@ -247,9 +252,23 @@
 				exit();
 			}
 
+			// Check expiry
+			$needle = '@faircode.eu';
+			if (substr($data->email, -strlen($needle)) === $needle) {
+				$timestamp = explode('.', $data->email)[0];
+				if ($timestamp < strtotime('2024-1-1')) {
+					echo json_encode(array('ok' => false, 'errno' => 301, 'error' => 'Permanent license required'));
+					exit();
+				}
+				if ($timestamp < time()) {
+					echo json_encode(array('ok' => false, 'errno' => 301, 'error' => 'License expired'));
+					exit();
+				}
+			}
+
 			// Validate
 			if (empty($data->package_name)) {
-				log_error('fetch: package name missing', $my_email, $data);
+				//log_error('fetch: package name missing', $my_email, $data);
 				echo json_encode(array('ok' => false, 'errno' => 303, 'error' => 'Package name missing'));
 				exit();
 			}
@@ -319,6 +338,91 @@
 				echo json_encode(array('ok' => $ok, 'errno' => ($ok ? 0 : 306), 'error' => ($ok ? '' : 'Error retrieving restrictions'), 'settings' => $settings));
 			exit();
 		}
+
+		// Update
+		else if (!empty($action) && $action == 'update') {
+			// Check credentials
+			$signature = '';
+			if (openssl_sign($data->email, $signature, $private_key, OPENSSL_ALGO_SHA1))
+				$signature = bin2hex($signature);
+
+			if (empty($signature) || $signature != $data->signature) {
+				header($_SERVER['SERVER_PROTOCOL'] . ' 403 Forbidden');
+				exit();
+			}
+
+			// Fixes
+			if (empty($data->android_id))
+				$data->android_id = '';
+			if (empty($data->xprivacy_version))
+				$data->xprivacy_version = 0;
+
+			// Throttling
+			if ($data->xprivacy_version >= 395) { // 2.99.29 (395) / 2.2.9 (397)
+				$sql = "SELECT COUNT(*) AS count FROM xprivacy_update";
+				$sql .= " WHERE android_id_md5 = '" . $db->real_escape_string($data->android_id) . "'";
+				$sql .= " AND time > '" . date('Y-m-d H:i:s', time() - 12 * 3600) . "'";
+				$sql .= " AND installed_version = '" . $db->real_escape_string($data->xprivacy_version_name) . "'";
+				$sql .= " AND installed_version <> current_version";
+				$result = $db->query($sql);
+				if ($result) {
+					if (($row = $result->fetch_object()))
+						if ($row->count >= 5) {
+							header($_SERVER['SERVER_PROTOCOL'] . ' 429 Too Many Requests');
+							exit();
+						}
+				}
+				else
+					log_error('update: error=' . $db->error . ' query=' . $sql, $my_email, $data);
+			}
+
+			// Release type
+			$folder = 'release';
+			if (!empty($data->test_versions) && $data->test_versions)
+				$folder = 'test';
+
+			// Find latest version
+			$latest = null;
+			$modified = null;
+			$files = glob($folder . '/XPrivacy_*.apk');
+			if ($files)
+				foreach ($files as $filename) {
+					$version = explode('_', basename($filename, '.apk'))[1];
+					if ($latest == null || version_compare($version, $latest) >= 0) {
+						$latest = $version;
+						$modified = filemtime($filename);
+					}
+				}
+
+			// Register check
+			$sql = "INSERT INTO xprivacy_update (android_id_md5, installed_version, test_versions, current_version)";
+			$sql .= " VALUES (";
+			$sql .= "'" . $db->real_escape_string($data->android_id) . "'";
+			$sql .= ", '" . $db->real_escape_string($data->xprivacy_version_name) . "'";
+			$sql .= ", " . (int)$data->test_versions;
+			$sql .= ", '" . $db->real_escape_string($latest) . "'";
+			$sql .= ")";
+			if (!$db->query($sql))
+				log_error('update: error=' . $db->error . ' query=' . $sql, $my_email, $data);
+
+			// Check if newer
+			if ($latest == null || version_compare($latest, $data->xprivacy_version_name) <= 0)
+				header($_SERVER['SERVER_PROTOCOL'] . ' 204 No Content');
+			else {
+				// Send latest
+				$apk = $folder . '/XPrivacy_' . $latest . '.apk';
+				header('Content-Type: application/octet-stream');
+				header('Content-Description: File Transfer');
+				header('Content-Disposition: attachment; filename=' . basename($apk));
+				header('Expires: 0');
+				header('Cache-Control: must-revalidate');
+				header('Pragma: public');
+				header('Content-Length: ' . filesize($apk));
+				readfile($apk);
+			}
+			exit();
+		}
+
 		else {
 			log_error('json: unknown action', $my_email, $data);
 			echo json_encode(array('ok' => false, 'errno' => 104, 'error' => 'Unknown action: ' . $action));
@@ -426,7 +530,7 @@
 				// Display titles
 				if (empty($package_name)) {
 ?>
-					<h1>XPrivacy</h1>
+					<h1><img src="ic_launcher.png" alt="XPrivacy" /> XPrivacy</h1>
 					<p>Crowd sourced restrictions</p>
 <?php
 				} else {
@@ -486,7 +590,7 @@
 				<p>This is a voting system for
 					<a href="https://github.com/M66B/XPrivacy#xprivacy">XPrivacy</a> restrictions.<br />
 					Everybody using XPrivacy can submit his/her restriction settings.<br />
-					With a <a href="http://www.xprivacy.eu/">Pro license</a> you can fetch submitted restriction settings.<br />
+					With an XPrivacy <a href="http://www.xprivacy.eu/">pro license</a> you can fetch submitted restriction settings.<br />
 					There are currently <?php echo number_format($total, 0, '.', ','); ?> rules
 					for <?php echo number_format($count, 0, '.', ',') ?> applications submitted.
 				</p>
@@ -517,13 +621,37 @@
 							<span class="glyphicon glyphicon-file"></span>
 							<a class="action" href="#" id="details">Show details</a>
 							<span class="glyphicon glyphicon-comment"></span>
-							<a class="action" href="http://forum.faircode.eu/forums/forum/android/xprivacy/applications/?package_name=<?php echo urlencode($package_name); ?>" target="_blank">Discussion</a>
+							<!--a class="action" href="http://forum.faircode.eu/forums/forum/android/xprivacy/applications/?package_name=<?php echo urlencode($package_name); ?>" target="_blank">Discussion</a-->
 							<a class="action" href="https://play.google.com/store/apps/details?id=<?php echo urlencode($package_name); ?>" target="_blank"><img src="play_logo_x2.png" style="width:95px; height:20px" alt="Play store" /></a>
 						</p>
 					</div>
 					<p style="font-size: smaller;">Rows marked with a <span style="background: lightgray;">grey background</span> will be restricted when fetched;
 					<strong>bold text</strong> means data was used</p>
 <?php
+				}
+
+				if (!empty($package_name)) {
+					$last_version = '';
+					$sql = "SELECT DISTINCT package_version";
+					$sql .= " FROM xprivacy";
+					$sql .= " WHERE package_name = '" . $db->real_escape_string($package_name) . "'";
+					$sql .= " ORDER BY package_version";
+					$result = $db->query($sql);
+					if ($result) {
+						echo '<p>';
+						while (($row = $result->fetch_object())) {
+							echo '<a href="?package_name=' . urlencode($package_name);
+							echo '&amp;package_version=' . urlencode($row->package_version) . '"">';
+							echo $row->package_version . '</a> ';
+							if (version_compare($row->package_version, $last_version, '>'))
+								$last_version = $row->package_version;
+						}
+						echo '</p>';
+						$result->close();
+					}
+
+					if (empty($package_version))
+						$package_version = $last_version;
 				}
 ?>
 				<table class="table table-hover table-condensed">
@@ -538,7 +666,8 @@
 <?php
 						} else {
 ?>
-							<th style="text-align: center;">Votes <sup>*</sup><br />deny/allow</th>
+							<th style="text-align: center;">All versions<br />deny/allow <sup>*</sup></th>
+							<th style="text-align: center;">Version <?php echo htmlentities($package_version, ENT_COMPAT, 'UTF-8'); ?><br />deny/allow</th>
 							<th style="text-align: center;">Exceptions<br />(yes/no)</th>
 							<th style="text-align: center;">CI95 &plusmn;% <sup>**</sup></th>
 							<th style="display: none; text-align: center;" class="details">Used</th>
@@ -589,6 +718,10 @@
 						$sql .= ", SUM(CASE WHEN restricted != 1 THEN 1 ELSE 0 END) AS not_restricted";
 						$sql .= ", SUM(CASE WHEN allowed > 0 THEN 1 ELSE 0 END) AS allowed";
 						$sql .= ", SUM(CASE WHEN allowed <= 0 THEN 1 ELSE 0 END) AS not_allowed";
+						$sql .= ", SUM(CASE WHEN restricted = 1 AND package_version = '" . $db->real_escape_string($package_version) . "' THEN 1 ELSE 0 END) AS restricted_package";
+						$sql .= ", SUM(CASE WHEN restricted != 1 AND package_version = '" . $db->real_escape_string($package_version) . "' THEN 1 ELSE 0 END) AS not_restricted_package";
+						$sql .= ", SUM(CASE WHEN allowed > 0 AND package_version = '" . $db->real_escape_string($package_version) . "' THEN 1 ELSE 0 END) AS allowed_package";
+						$sql .= ", SUM(CASE WHEN allowed <= 0 AND package_version = '" . $db->real_escape_string($package_version) . "' THEN 1 ELSE 0 END) AS not_allowed_package";
 						$sql .= ", MAX(used) AS used";
 						$sql .= ", MAX(modified) AS modified";
 						$sql .= ", SUM(updates) AS updates";
@@ -623,6 +756,10 @@
 								echo ' / ';
 								echo ($row->restricted > $row->not_restricted) ? '<span class="text-muted">' . $row->not_restricted . '</span>' : $row->not_restricted;
 								echo ' <span style="font-size: smaller;">' . number_format($diff * 100, 0) . '%</span>';
+								echo '</td>';
+
+								echo '<td style="text-align: center; font-size: smaller;">';
+								echo $row->restricted_package . ' / ' . $row->not_restricted_package;
 								echo '</td>';
 
 								echo '<td style="text-align: center;">';
@@ -679,7 +816,7 @@
 			<div class="container">
 				<a id="privacy_policy" href="#">Privacy policy</a>
 				<p id="privacy_policy_text" style="display: none;">I will not, under any circumstances whatsoever, give out or sell your information to anyone, unless required by law.</p>
-				<p class="text-muted credit">Copyright &copy; 2013-<?php echo date("Y"); ?> by <a href="http://blog.bokhorst.biz/about/" target="_blank">Marcel Bokhorst</a></p>
+				<p class="text-muted credit">Copyright &copy; 2013&ndash;<?php echo date("Y"); ?> by <a href="http://blog.bokhorst.biz/about/" target="_blank">Marcel Bokhorst</a></p>
 			</div>
 <?php
 		// Close database connection
